@@ -1,0 +1,446 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SEO Audit Dashboard</title>
+<style>
+  :root {
+    --bg: #0c0f14;
+    --card: #141820;
+    --border: #1e2430;
+    --text: #e4e6eb;
+    --muted: #8b8fa3;
+    --accent: #3b82f6;
+    --green: #22c55e;
+    --yellow: #eab308;
+    --red: #ef4444;
+    --purple: #a855f7;
+  }
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    min-height: 100vh;
+  }
+  .container { max-width: 1200px; margin: 0 auto; padding: 24px 20px; }
+
+  /* HEADER */
+  .header {
+    text-align: center;
+    padding: 48px 0 32px;
+  }
+  .header h1 {
+    font-size: 2.4rem;
+    font-weight: 700;
+    background: linear-gradient(135deg, #3b82f6, #a855f7);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    margin-bottom: 8px;
+  }
+  .header p { color: var(--muted); font-size: 1.05rem; }
+
+  /* INPUT */
+  .input-row {
+    display: flex;
+    gap: 12px;
+    max-width: 700px;
+    margin: 0 auto 40px;
+  }
+  .input-row input {
+    flex: 1;
+    padding: 14px 20px;
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    color: var(--text);
+    font-size: 1rem;
+    outline: none;
+    transition: border .2s;
+  }
+  .input-row input:focus { border-color: var(--accent); }
+  .input-row button {
+    padding: 14px 32px;
+    background: var(--accent);
+    border: none;
+    border-radius: 12px;
+    color: white;
+    font-size: 1rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: opacity .2s;
+    white-space: nowrap;
+  }
+  .input-row button:hover { opacity: 0.9; }
+  .input-row button:disabled { opacity: 0.5; cursor: not-allowed; }
+
+  /* LOADING */
+  .loading {
+    text-align: center;
+    padding: 40px;
+    display: none;
+  }
+  .loading.active { display: block; }
+  .spinner {
+    width: 40px; height: 40px;
+    border: 3px solid var(--border);
+    border-top-color: var(--accent);
+    border-radius: 50%;
+    animation: spin .8s linear infinite;
+    margin: 0 auto 16px;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  /* ERROR */
+  .error {
+    background: rgba(239,68,68,0.1);
+    border: 1px solid rgba(239,68,68,0.3);
+    color: var(--red);
+    padding: 16px 20px;
+    border-radius: 12px;
+    margin-bottom: 24px;
+    display: none;
+  }
+
+  /* RESULTS */
+  .results { display: none; }
+  .results.active { display: block; }
+
+  /* OVERALL SCORE */
+  .score-hero {
+    display: flex;
+    align-items: center;
+    gap: 24px;
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    padding: 28px 32px;
+    margin-bottom: 24px;
+  }
+  .score-circle {
+    width: 90px; height: 90px;
+    border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 2rem; font-weight: 700;
+    flex-shrink: 0;
+  }
+  .score-circle.good { background: rgba(34,197,94,0.15); color: var(--green); border: 3px solid var(--green); }
+  .score-circle.ok { background: rgba(234,179,8,0.15); color: var(--yellow); border: 3px solid var(--yellow); }
+  .score-circle.bad { background: rgba(239,68,68,0.15); color: var(--red); border: 3px solid var(--red); }
+  .score-info h3 { font-size: 1.2rem; margin-bottom: 4px; color: var(--muted); }
+  .score-info .url { color: var(--accent); font-size: 0.85rem; word-break: break-all; }
+  .score-info .stats { color: var(--muted); font-size: 0.85rem; margin-top: 6px; }
+
+  /* METRICS GRID */
+  .metrics-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+    gap: 16px;
+    margin-bottom: 24px;
+  }
+  .metric-card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 20px;
+  }
+  .metric-card .icon { font-size: 1.4rem; margin-bottom: 8px; }
+  .metric-card .label { color: var(--muted); font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px; }
+  .metric-card .value { font-size: 1.5rem; font-weight: 600; }
+  .metric-card .sub { color: var(--muted); font-size: 0.8rem; margin-top: 4px; }
+  .metric-bar {
+    height: 4px;
+    background: var(--border);
+    border-radius: 2px;
+    margin-top: 12px;
+    overflow: hidden;
+  }
+  .metric-bar-fill {
+    height: 100%;
+    border-radius: 2px;
+    transition: width .5s ease;
+  }
+  .fill-good { background: var(--green); }
+  .fill-ok { background: var(--yellow); }
+  .fill-bad { background: var(--red); }
+  .fill-purple { background: var(--purple); }
+
+  /* DETAILS SECTIONS */
+  .detail-section {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 24px;
+    margin-bottom: 16px;
+  }
+  .detail-section h3 {
+    font-size: 1rem;
+    margin-bottom: 16px;
+    display: flex; align-items: center; gap: 8px;
+  }
+  .detail-section h3 .s-icon { font-size: 1.1rem; }
+  .cop {
+    background: rgba(59,130,246,0.1);
+    color: var(--accent);
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-size: 0.75rem;
+    font-weight: 600;
+    margin-left: auto;
+  }
+  .cop.good { background: rgba(34,197,94,0.1); color: var(--green); }
+  .cop.warn { background: rgba(234,179,8,0.1); color: var(--yellow); }
+  .cop.bad { background: rgba(239,68,68,0.1); color: var(--red); }
+
+  /* TAGS TABLE */
+  .tag-row {
+    display: grid;
+    grid-template-columns: 140px 1fr 120px;
+    gap: 12px;
+    padding: 10px 0;
+    border-bottom: 1px solid var(--border);
+    align-items: center;
+    font-size: 0.88rem;
+  }
+  .tag-row:last-child { border: none; }
+  .tag-row .tag-name { color: var(--muted); font-weight: 500; }
+  .tag-row .tag-val { word-break: break-word; }
+  .tag-val.empty { color: var(--red); font-style: italic; }
+
+  /* HEADINGS LIST */
+  .headings-list { font-size: 0.88rem; }
+  .headings-list .h-item { padding: 4px 0; color: var(--muted); }
+  .headings-list .h-item.h1-item { color: var(--text); font-weight: 600; }
+  .headings-list .h-item.h2-item { padding-left: 16px; }
+
+  /* LINKS ROW */
+  .links-row { display: flex; gap: 24px; }
+  .links-row div { font-size: 0.88rem; }
+  .links-row strong { display: block; font-size: 1.3rem; }
+  .links-row span { color: var(--muted); font-size: 0.75rem; }
+
+  /* SCHEMA */
+  .schema-badge {
+    display: inline-block;
+    padding: 4px 12px;
+    border-radius: 20px;
+    font-size: 0.8rem;
+    font-weight: 500;
+    background: rgba(168,85,247,0.15);
+    color: var(--purple);
+    margin: 4px;
+  }
+  .schema-none { color: var(--muted); font-style: italic; }
+
+  /* IMAGES MINI TABLE */
+  .img-mini { font-size: 0.8rem; color: var(--muted); }
+  .img-mini .alt-ok { color: var(--green); }
+  .img-mini .alt-miss { color: var(--red); }
+
+  /* RESPONSIVE */
+  @media (max-width: 600px) {
+    .header h1 { font-size: 1.6rem; }
+    .input-row { flex-direction: column; }
+    .score-hero { flex-direction: column; text-align: center; }
+    .tag-row { grid-template-columns: 100px 1fr 80px; font-size: 0.8rem; }
+    .links-row { flex-direction: column; gap: 12px; }
+  }
+</style>
+</head>
+<body>
+<div class="container">
+  <div class="header">
+    <h1>&#x1F50D; SEO Audit Dashboard</h1>
+    <p>Enter a URL to get a complete on-page SEO analysis</p>
+  </div>
+
+  <div class="input-row">
+    <input id="urlInput" type="text" placeholder="Enter website URL (e.g. https://maximo-seo.ai)" />
+    <button id="analyzeBtn" onclick="analyze()">&#x1F50E; Analyze</button>
+  </div>
+
+  <div class="loading" id="loading">
+    <div class="spinner"></div>
+    <p>Analyzing website...</p>
+  </div>
+
+  <div class="error" id="error"></div>
+
+  <div class="results" id="results"></div>
+</div>
+
+<script>
+const $ = s => document.getElementById(s);
+
+function scoreColor(v) {
+  if (v >= 80) return 'good';
+  if (v >= 50) return 'ok';
+  return 'bad';
+}
+
+function copBadge(label, val) {
+  if (val >= 80) return `<span class="cop good">${label} ✓</span>`;
+  if (val >= 50) return `<span class="cop warn">${label} ⚠</span>`;
+  return `<span class="cop bad">${label} ✗</span>`;
+}
+
+function barColor(v) {
+  if (v >= 80) return 'fill-good';
+  if (v >= 50) return 'fill-ok';
+  return 'fill-bad';
+}
+
+async function analyze() {
+  const url = $('urlInput').value.trim();
+  if (!url) return;
+
+  $('analyzeBtn').disabled = true;
+  $('loading').classList.add('active');
+  $('results').classList.remove('active');
+  $('error').style.display = 'none';
+
+  try {
+    const r = await fetch('/api/analyze', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url })
+    });
+    const d = await r.json();
+
+    if (!d.success) {
+      $('error').textContent = '❌ ' + (d.error || 'Unknown error');
+      $('error').style.display = 'block';
+    } else {
+      render(d);
+      $('results').classList.add('active');
+    }
+  } catch (e) {
+    $('error').textContent = '❌ Connection error: ' + e.message;
+    $('error').style.display = 'block';
+  }
+
+  $('loading').classList.remove('active');
+  $('analyzeBtn').disabled = false;
+}
+
+function render(d) {
+  const s = d.scores;
+  const sc = s.seo;
+  const scColor = scoreColor(sc);
+  const kb = (d.htmlSize / 1024).toFixed(1);
+  const sec = (d.loadTime / 1000).toFixed(2);
+
+  let h = '';
+
+  // Hero score
+  h += `<div class="score-hero">
+    <div class="score-circle ${scColor}">${sc}</div>
+    <div class="score-info">
+      <h3>Overall SEO Score</h3>
+      <div class="url">${d.url}</div>
+      <div class="stats">⏱ ${sec}s &nbsp;|&nbsp; 📦 ${kb}KB &nbsp;|&nbsp; 🔒 ${d.ssl ? 'SSL ✓' : 'No SSL ✗'} &nbsp;|&nbsp; 📝 ${d.wordCount} words</div>
+    </div>
+  </div>`;
+
+  // Metric cards
+  h += '<div class="metrics-grid">';
+
+  const metrics = [
+    ['📄','Title',s.title,'/100', s.title, scoreColor(s.title), d.titleLength + ' chars', barColor(s.title)],
+    ['📝','Meta Description',s.description,'/100', s.description, scoreColor(s.description), d.descLength + ' chars', barColor(s.description)],
+    ['📑','Headings',s.headings,'/100', s.headings, scoreColor(s.headings), `H1: ${d.headings.h1.length} | H2: ${d.headings.h2.length} | H3: ${d.headings.h3Count}`, barColor(s.headings)],
+    ['🖼','Images & Alt',s.images,'/100', s.images, scoreColor(s.images), `${d.images.withoutAlt}/${d.images.total} missing alt text`, barColor(s.images)],
+    ['🔗','Links',s.links,'/100', s.links, scoreColor(s.links), `${d.links.internal} internal | ${d.links.external} external`, barColor(s.links)],
+    ['📊','Schema',s.schema,'/100', s.schema, scoreColor(s.schema), `${d.schemas.length} types found`, barColor(s.schema)],
+    ['📱','Mobile',s.mobile,'/100', s.mobile, scoreColor(s.mobile), d.viewport ? 'Viewport set' : 'No viewport meta', barColor(s.mobile)],
+    ['⚡','Performance',s.performance,'/100', s.performance, scoreColor(s.performance), `Load: ${sec}s | Size: ${kb}KB`, barColor(s.performance)],
+  ];
+
+  metrics.forEach(([icon, label, score, _, scoreVal, scClass, sub, barCls]) => {
+    h += `<div class="metric-card">
+      <div class="icon">${icon}</div>
+      <div class="label">${label}</div>
+      <div class="value">${scoreVal}${_}</div>
+      <div class="sub">${sub}</div>
+      <div class="metric-bar"><div class="metric-bar-fill ${barCls}" style="width:${scoreVal}%"></div></div>
+    </div>`;
+  });
+  h += '</div>';
+
+  // Title & Meta detail
+  h += `<div class="detail-section">
+    <h3><span class="s-icon">📄</span> Title & Meta Tags</h3>`;
+  h += `<div class="tag-row"><span class="tag-name">Title</span><span class="tag-val">${esc(d.title) || '<span class="empty">MISSING</span>'}</span>${copBadge('', d.scores.title)}</div>`;
+  h += `<div class="tag-row"><span class="tag-name">Meta Description</span><span class="tag-val">${esc(d.metaDesc) || '<span class="empty">MISSING</span>'}</span>${copBadge('', d.scores.description)}</div>`;
+  h += `<div class="tag-row"><span class="tag-name">Canonical</span><span class="tag-val">${esc(d.canonical) || '<span class="empty">Not set</span>'}</span></div>`;
+  h += `<div class="tag-row"><span class="tag-name">Robots</span><span class="tag-val">${esc(d.robots) || '<span class="empty">Not set (default: index, follow)</span>'}</span></div>`;
+  h += `<div class="tag-row"><span class="tag-name">Viewport</span><span class="tag-val">${esc(d.viewport) || '<span class="empty">MISSING — not mobile-friendly</span>'}</span></div>`;
+  if (d.og.title) h += `<div class="tag-row"><span class="tag-name">OG Title</span><span class="tag-val">${esc(d.og.title)}</span></div>`;
+  if (d.og.description) h += `<div class="tag-row"><span class="tag-name">OG Description</span><span class="tag-val">${esc(d.og.description)}</span></div>`;
+  if (d.og.image) h += `<div class="tag-row"><span class="tag-name">OG Image</span><span class="tag-val" style="color:var(--accent)">${esc(d.og.image)}</span></div>`;
+  h += '</div>';
+
+  // Headings
+  h += `<div class="detail-section">
+    <h3><span class="s-icon">📑</span> Heading Structure (H1: ${d.headings.h1.length}, H2: ${d.headings.h2.length}, H3: ${d.headings.h3Count})</h3>
+    <div class="headings-list">`;
+  d.headings.h1.forEach(v => h += `<div class="h-item h1-item">H1: ${esc(v)}</div>`);
+  if (d.headings.h1.length === 0) h += '<div class="h-item" style="color:var(--red)">⚠ No H1 tag found!</div>';
+  d.headings.h2.slice(0, 10).forEach(v => h += `<div class="h-item h2-item">H2: ${esc(v)}</div>`);
+  if (d.headings.h2.length > 10) h += `<div class="h-item h2-item" style="color:var(--muted)">... +${d.headings.h2.length - 10} more H2s</div>`;
+  h += '</div></div>';
+
+  // Links
+  h += `<div class="detail-section">
+    <h3><span class="s-icon">🔗</span> Link Analysis</h3>
+    <div class="links-row">
+      <div><strong>${d.links.internal}</strong><span>Internal links</span></div>
+      <div><strong>${d.links.external}</strong><span>External links</span></div>
+    </div>
+  </div>`;
+
+  // Schema
+  h += `<div class="detail-section">
+    <h3><span class="s-icon">📊</span> Schema Markup</h3>`;
+  if (d.schemas.length === 0) {
+    h += '<div class="schema-none">No structured data (JSON-LD) found</div>';
+  } else {
+    d.schemas.forEach(s => {
+      const type = s['@type'];
+      const types = Array.isArray(type) ? type : [type];
+      types.filter(Boolean).forEach(t => h += `<span class="schema-badge">${esc(t)}</span>`);
+    });
+  }
+  h += '</div>';
+
+  // Images
+  h += `<div class="detail-section">
+    <h3><span class="s-icon">🖼</span> Images (${d.images.total} total, ${d.images.withoutAlt} missing alt text)</h3>
+    <div class="img-mini">`;
+  d.images.list.forEach(img => {
+    const cls = img.hasAlt ? 'alt-ok' : 'alt-miss';
+    h += `<div style="margin:3px 0"><span class="${cls}">${img.hasAlt ? '✓' : '✗'}</span> ${esc(img.src.substring(0, 60))}${img.src.length > 60 ? '...' : ''} | Alt: "${esc(img.alt || 'MISSING')}"</div>`;
+  });
+  if (d.images.total > 20) h += `<div style="color:var(--muted);margin-top:4px">... +${d.images.total - 20} more images</div>`;
+  h += '</div></div>';
+
+  $('results').innerHTML = h;
+}
+
+function esc(s) {
+  if (typeof s !== 'string') return '';
+  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+// Enter key
+$('urlInput').addEventListener('keydown', e => { if (e.key === 'Enter') analyze(); });
+
+// Load from hash
+if (window.location.hash) {
+  const h = decodeURIComponent(window.location.hash.slice(1));
+  if (h) { $('urlInput').value = h; }
+}
+</script>
+</body>
+</html>
