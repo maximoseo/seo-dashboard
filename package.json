@@ -1,0 +1,45 @@
+{
+  "name": "seo-dashboard",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "concurrently \"npm run server:dev\" \"vite\"",
+    "dev:frontend": "vite",
+    "server:dev": "tsx watch server/index.ts",
+    "server:start": "node dist-server/index.js",
+    "build": "tsc -b && vite build && tsc -p tsconfig.server.json",
+    "build:frontend": "tsc -b && vite build",
+    "build:server": "tsc -p tsconfig.server.json",
+    "typecheck": "tsc -b --pretty false",
+    "preview": "vite preview",
+    "start": "node dist-server/index.js"
+  },
+  "dependencies": {
+    "@tailwindcss/vite": "latest",
+    "@vitejs/plugin-react": "latest",
+    "axios": "^1.7.9",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.7",
+    "express": "^4.21.2",
+    "framer-motion": "latest",
+    "node-cache": "^5.1.2",
+    "react": "latest",
+    "react-dom": "latest",
+    "react-router-dom": "^7.18.0",
+    "recharts": "^3.8.1",
+    "tailwindcss": "latest",
+    "typescript": "latest",
+    "vite": "latest"
+  },
+  "devDependencies": {
+    "@types/cors": "^2.8.17",
+    "@types/express": "^5.0.0",
+    "@types/node": "latest",
+    "@types/react": "latest",
+    "@types/react-dom": "latest",
+    "concurrently": "^9.1.2",
+    "playwright": "^1.61.0",
+    "tsx": "^4.19.2"
+  }
+}

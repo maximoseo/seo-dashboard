@@ -1,0 +1,97 @@
+@import "tailwindcss";
+
+@theme {
+  --font-display: "Inter", system-ui, sans-serif;
+  --font-body: "Inter", system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+
+  --color-bg-darkest: #0A0F1E;
+  --color-bg-card: #0D1624;
+  --color-bg-card-hover: #111D30;
+  --color-bg-sidebar: #0D1117;
+  --color-bg-nav-active: #1E3A5F;
+  --color-border: rgba(255, 255, 255, 0.08);
+  --color-border-light: rgba(255, 255, 255, 0.12);
+
+  --color-accent: #3B82F6;
+  --color-accent-light: #60A5FA;
+  --color-accent-glow: rgba(59, 130, 246, 0.15);
+
+  --color-fg: #FFFFFF;
+  --color-fg-muted: #9CA3AF;
+  --color-fg-dim: #6B7280;
+
+  --color-green: #22C55E;
+  --color-green-light: #4ADE80;
+  --color-red: #EF4444;
+  --color-yellow: #F59E0B;
+  --color-orange: #F97316;
+
+  --breakpoint-sm: 640px;
+  --breakpoint-md: 768px;
+  --breakpoint-lg: 1024px;
+  --breakpoint-xl: 1280px;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  background: var(--color-bg-darkest);
+}
+
+body {
+  margin: 0;
+  min-width: 320px;
+  background: var(--color-bg-darkest);
+  color: var(--color-fg);
+  font-family: var(--font-body);
+  text-rendering: geometricPrecision;
+  -webkit-font-smoothing: antialiased;
+}
+
+img,
+svg,
+video,
+canvas {
+  display: block;
+  max-width: 100%;
+}
+
+button,
+a,
+input,
+textarea,
+select {
+  font: inherit;
+}
+
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.2);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
+  }
+}
