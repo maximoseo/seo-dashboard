@@ -1,7 +1,8 @@
 // Multi-source SEO API service
 // All calls go through the Express backend at /api/*
 
-const CACHE_TTL = 5 * 60 * 1000 // 5 minutes
+const CACHE_TTL_REALTIME = 5 * 60 * 1000 // 5 minutes
+const CACHE_TTL_HISTORICAL = 24 * 60 * 60 * 1000 // 24 hours
 
 function getCached<T>(key: string): T | null {
   try {
@@ -18,7 +19,7 @@ function getCached<T>(key: string): T | null {
   }
 }
 
-function setCache<T>(key: string, data: T, ttl = CACHE_TTL): void {
+function setCache<T>(key: string, data: T, ttl = CACHE_TTL_REALTIME): void {
   try {
     sessionStorage.setItem(`seo_cache_${key}`, JSON.stringify({ data, expiry: Date.now() + ttl }))
   } catch {
@@ -26,18 +27,19 @@ function setCache<T>(key: string, data: T, ttl = CACHE_TTL): void {
   }
 }
 
-async function apiFetch<T>(url: string, options?: RequestInit): Promise<T> {
+async function apiFetch<T>(url: string, options?: RequestInit & { cacheTtl?: number }): Promise<T> {
   const cacheKey = url + JSON.stringify(options?.body || '')
   const cached = getCached<T>(cacheKey)
   if (cached) return cached
 
-  const res = await fetch(url, options)
+  const { cacheTtl, ...fetchOptions } = options || {}
+  const res = await fetch(url, fetchOptions)
   if (!res.ok) {
     const text = await res.text().catch(() => '')
     throw new Error(`API ${res.status}: ${text.slice(0, 200)}`)
   }
   const data = await res.json()
-  setCache(cacheKey, data)
+  setCache(cacheKey, data, cacheTtl || CACHE_TTL_REALTIME)
   return data
 }
 
@@ -45,12 +47,16 @@ async function apiFetch<T>(url: string, options?: RequestInit): Promise<T> {
 
 export interface OverviewData {
   domain: string
+  activeSources?: string[]
   sources: {
     ahrefs?: {
       domain_rating?: { domain_rating: number; ahrefs_rank: number }
+      metrics?: Record<string, any>
     }
     semrush?: Record<string, string>
     dataforseo?: Record<string, any>
+    seranking?: Record<string, any>
+    exa?: Record<string, any>
   }
 }
 
@@ -81,15 +87,115 @@ export interface PageSpeedData {
   }
 }
 
+export interface AggregatedKeywords {
+  activeSources: string[]
+  keywords: Array<{
+    keyword: string
+    volume: number | null
+    position: number | null
+    change: number | null
+    url: string | null
+    difficulty: number | null
+    cpc: number | null
+    traffic: number | null
+    source: string
+    serpFeatures?: string[]
+    intent?: string
+  }>
+  totalCount: number
+}
+
+export interface AggregatedBacklinks {
+  activeSources: string[]
+  summary: {
+    totalBacklinks: number
+    referringDomains: number
+    dofollowRatio: number
+    newLast30d: number
+    lostLast30d: number
+  }
+  referringDomains: Array<{
+    domain: string
+    dr: number
+    backlinks: number
+    firstSeen: string
+    source: string
+  }>
+}
+
+export interface AggregatedVitals {
+  activeSources: string[]
+  pagespeed?: PageSpeedData
+  gtmetrix?: {
+    grade: string
+    performance: number
+    structure: number
+    lcp: number
+    tbt: number
+    cls: number
+  }
+  browserless?: {
+    performance: number
+    accessibility: number
+    bestPractices: number
+    seo: number
+  }
+}
+
+export interface AggregatedCompetitors {
+  activeSources: string[]
+  competitors: Array<{
+    domain: string
+    commonKeywords?: number
+    organicTraffic?: number
+    dr?: number
+    source: string
+  }>
+}
+
+export interface ContentAnalysis {
+  activeSources: string[]
+  exa?: {
+    results: Array<{
+      title: string
+      url: string
+      score: number
+      text?: string
+    }>
+  }
+  thorbit?: {
+    suggestions: string[]
+    score?: number
+  }
+  dataforseo?: {
+    onPage: Record<string, any>
+  }
+}
+
+export interface AggregatedAlerts {
+  activeSources: string[]
+  alerts: Array<{
+    id: string
+    severity: 'critical' | 'warning' | 'info'
+    title: string
+    description: string
+    detail: string
+    module: string
+    source: string
+    time: string
+    timestamp: number
+  }>
+}
+
 export interface ApiHealthStatus {
-  statuses: Record<string, { ok: boolean; latency?: number; error?: string }>
+  statuses: Record<string, { ok: boolean; latency?: number; error?: string; configured?: boolean }>
   cacheStats: {
     realtime: Record<string, number>
     historical: Record<string, number>
   }
 }
 
-// ─── API calls ────────────────────────────────────────────────────────────────
+// ─── Core API calls ───────────────────────────────────────────────────────────
 
 export async function fetchOverview(domain: string): Promise<OverviewData> {
   return apiFetch<OverviewData>(`/api/overview?domain=${encodeURIComponent(domain)}`)
@@ -123,21 +229,71 @@ export async function fetchDataForSeoDomainSummary(target: string) {
   })
 }
 
-export async function fetchSerpstatDomain(domain: string) {
-  return apiFetch<any>('/api/serpstat/domain', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ domain }),
+// ─── Aggregated multi-source endpoints ────────────────────────────────────────
+
+export async function fetchAggregatedKeywords(domain: string, limit = 50): Promise<AggregatedKeywords> {
+  return apiFetch<AggregatedKeywords>(`/api/keywords/aggregated?domain=${encodeURIComponent(domain)}&limit=${limit}`)
+}
+
+export async function fetchAggregatedBacklinks(domain: string, limit = 50): Promise<AggregatedBacklinks> {
+  return apiFetch<AggregatedBacklinks>(`/api/backlinks/aggregated?domain=${encodeURIComponent(domain)}&limit=${limit}`)
+}
+
+export async function fetchAggregatedVitals(domain: string): Promise<AggregatedVitals> {
+  return apiFetch<AggregatedVitals>(`/api/vitals/aggregated?domain=${encodeURIComponent(domain)}`)
+}
+
+export async function fetchAggregatedCompetitors(domain: string): Promise<AggregatedCompetitors> {
+  return apiFetch<AggregatedCompetitors>(`/api/competitors/aggregated?domain=${encodeURIComponent(domain)}`, {
+    cacheTtl: CACHE_TTL_HISTORICAL,
   })
 }
 
-export async function fetchKeywordsEverywhere(keywords: string[]) {
-  return apiFetch<any>('/api/keywords-everywhere', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ keywords }),
+export async function fetchContentAnalysis(domain: string, keyword?: string): Promise<ContentAnalysis> {
+  const params = new URLSearchParams({ domain })
+  if (keyword) params.set('keyword', keyword)
+  return apiFetch<ContentAnalysis>(`/api/content/analyze?${params}`, {
+    cacheTtl: CACHE_TTL_HISTORICAL,
   })
 }
+
+export async function fetchAggregatedAlerts(domain: string): Promise<AggregatedAlerts> {
+  return apiFetch<AggregatedAlerts>(`/api/alerts/aggregated?domain=${encodeURIComponent(domain)}`)
+}
+
+// ─── Exa search (for content/competitor research) ─────────────────────────────
+
+export async function fetchExaSearch(query: string, numResults = 10) {
+  return apiFetch<any>('/api/exa/search', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ query, numResults }),
+    cacheTtl: CACHE_TTL_HISTORICAL,
+  })
+}
+
+export async function fetchExaFetch(urls: string[]) {
+  return apiFetch<any>('/api/exa/fetch', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ urls }),
+    cacheTtl: CACHE_TTL_HISTORICAL,
+  })
+}
+
+// ─── Browserless (Lighthouse, scraping) ───────────────────────────────────────
+
+export async function fetchBrowserlessLighthouse(url: string) {
+  return apiFetch<any>(`/api/browserless/lighthouse?url=${encodeURIComponent(url)}`)
+}
+
+export async function fetchBrowserlessScrape(url: string) {
+  return apiFetch<any>(`/api/browserless/scrape?url=${encodeURIComponent(url)}`, {
+    cacheTtl: CACHE_TTL_HISTORICAL,
+  })
+}
+
+// ─── Health & Cache ───────────────────────────────────────────────────────────
 
 export async function fetchApiHealth(): Promise<ApiHealthStatus> {
   const res = await fetch('/api/health')

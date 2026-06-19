@@ -56,11 +56,11 @@ export default function OrganicTrafficChart({ dateRange, onDateRangeChange }: Pr
       initial={{ opacity: 0, y: 20 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.4, delay: 0.3 }}
-      className="bg-bg-card border border-border rounded-xl p-5 hover:border-border-light transition-colors"
+      className="bg-bg-card border border-border rounded-xl p-4 md:p-5 hover:border-border-light transition-all card-glow"
     >
-      <div className="flex items-center justify-between mb-4">
+      <div className="flex items-center justify-between mb-3 md:mb-4">
         <div className="flex items-center gap-1.5">
-          <h3 className="text-xs font-semibold tracking-wider uppercase text-fg-muted">Organic Traffic</h3>
+          <h3 className="text-[11px] md:text-xs font-semibold tracking-wider uppercase text-fg-muted">Organic Traffic</h3>
           <InfoIcon />
         </div>
 
@@ -69,7 +69,7 @@ export default function OrganicTrafficChart({ dateRange, onDateRangeChange }: Pr
             <button
               key={p}
               onClick={() => onDateRangeChange(p)}
-              className={`px-3 py-1 text-xs font-medium rounded-md transition-all ${
+              className={`px-2.5 md:px-3 py-1.5 text-xs font-medium rounded-md transition-all touch-target-reset ${
                 dateRange === p
                   ? 'bg-accent text-white'
                   : 'text-fg-muted hover:text-fg'
@@ -81,7 +81,7 @@ export default function OrganicTrafficChart({ dateRange, onDateRangeChange }: Pr
         </div>
       </div>
 
-      <div className="h-[260px]">
+      <div className="h-[220px] md:h-[260px]">
         <ResponsiveContainer width="100%" height="100%">
           <AreaChart data={chartData} margin={{ top: 5, right: 5, left: -10, bottom: 0 }}>
             <defs>

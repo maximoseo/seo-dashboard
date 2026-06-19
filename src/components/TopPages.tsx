@@ -14,11 +14,11 @@ export default function TopPages() {
       initial={{ opacity: 0, y: 20 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.4, delay: 0.35 }}
-      className="bg-bg-card border border-border rounded-xl p-5 hover:border-border-light transition-colors"
+      className="bg-bg-card border border-border rounded-xl p-4 md:p-5 hover:border-border-light transition-all card-glow"
     >
-      <div className="flex items-center justify-between mb-4">
+      <div className="flex items-center justify-between mb-3 md:mb-4">
         <div className="flex items-center gap-1.5">
-          <h3 className="text-xs font-semibold tracking-wider uppercase text-fg-muted">Top Pages by Traffic</h3>
+          <h3 className="text-[11px] md:text-xs font-semibold tracking-wider uppercase text-fg-muted">Top Pages by Traffic</h3>
           <InfoIcon />
         </div>
         <span className="text-xs font-semibold tracking-wider uppercase text-fg-muted">Sessions</span>

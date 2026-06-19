@@ -129,20 +129,34 @@ export default function KeywordsPage() {
   ]
 
   return (
-    <div className="space-y-5">
+    <div className="space-y-4 lg:space-y-5">
+      {/* Header with source badges */}
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+        <div>
+          <h2 className="text-base md:text-lg font-semibold text-fg">Keyword Rankings</h2>
+          <p className="text-xs md:text-sm text-fg-muted mt-0.5">Track keyword positions across multiple data sources</p>
+        </div>
+        <div className="flex gap-1.5 flex-wrap">
+          <span className="text-[10px] md:text-xs bg-orange-500/20 text-orange-300 border border-orange-500/30 px-1.5 md:px-2 py-0.5 md:py-1 rounded touch-target-reset">Ahrefs</span>
+          <span className="text-[10px] md:text-xs bg-orange-400/20 text-orange-200 border border-orange-400/30 px-1.5 md:px-2 py-0.5 md:py-1 rounded touch-target-reset">SEMrush</span>
+          <span className="text-[10px] md:text-xs bg-purple-500/20 text-purple-300 border border-purple-500/30 px-1.5 md:px-2 py-0.5 md:py-1 rounded touch-target-reset">DataForSEO</span>
+          <span className="text-[10px] md:text-xs bg-cyan-500/20 text-cyan-300 border border-cyan-500/30 px-1.5 md:px-2 py-0.5 md:py-1 rounded touch-target-reset">SE Ranking</span>
+        </div>
+      </div>
+
       {/* Summary Cards */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 md:gap-4">
         {summaryCards.map((card, i) => (
           <motion.div
             key={card.label}
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.4, delay: i * 0.05 }}
-            className="bg-bg-card border border-border rounded-xl p-5 hover:border-border-light transition-colors"
+            className="bg-bg-card border border-border rounded-xl p-3.5 md:p-5 hover:border-border-light transition-all card-glow"
           >
-            <p className="text-xs font-semibold tracking-wider uppercase text-fg-muted">{card.label}</p>
-            <p className="text-3xl font-bold text-fg mt-1">{card.value}</p>
-            <p className={`text-sm font-medium mt-1 ${card.color}`}>↑ {card.change}</p>
+            <p className="text-[10px] md:text-xs font-semibold tracking-wider uppercase text-fg-muted">{card.label}</p>
+            <p className="text-2xl md:text-3xl font-bold text-fg mt-1">{card.value}</p>
+            <p className={`text-xs md:text-sm font-medium mt-1 ${card.color}`}>{'\u2191'} {card.change}</p>
           </motion.div>
         ))}
       </div>
@@ -152,10 +166,10 @@ export default function KeywordsPage() {
         initial={{ opacity: 0, y: 20 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ duration: 0.4, delay: 0.2 }}
-        className="bg-bg-card border border-border rounded-xl p-4"
+        className="bg-bg-card border border-border rounded-xl p-3 md:p-4"
       >
-        <div className="flex flex-wrap items-center gap-3">
-          <div className="relative flex-1 min-w-[200px]">
+        <div className="flex flex-col sm:flex-row sm:items-center gap-2.5 sm:gap-3">
+          <div className="relative flex-1">
             <svg width="16" height="16" viewBox="0 0 16 16" fill="none" className="absolute left-3 top-1/2 -translate-y-1/2 text-fg-dim">
               <circle cx="7" cy="7" r="5" stroke="currentColor" strokeWidth="1.5" />
               <path d="M11 11l3 3" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
@@ -165,31 +179,33 @@ export default function KeywordsPage() {
               placeholder="Search keywords..."
               value={search}
               onChange={e => { setSearch(e.target.value); setPage(1) }}
-              className="w-full pl-9 pr-3 py-2 rounded-lg bg-bg-darkest border border-border text-sm text-fg placeholder:text-fg-dim focus:outline-none focus:border-accent transition-colors"
+              className="w-full pl-9 pr-3 py-2.5 rounded-lg bg-bg-darkest border border-border text-sm text-fg placeholder:text-fg-dim focus:outline-none focus:border-accent transition-colors"
             />
           </div>
-          <select
-            value={posFilter}
-            onChange={e => { setPosFilter(e.target.value); setPage(1) }}
-            className="px-3 py-2 rounded-lg bg-bg-darkest border border-border text-sm text-fg-muted focus:outline-none focus:border-accent transition-colors"
-          >
-            <option value="all">All Positions</option>
-            <option value="top3">Top 3</option>
-            <option value="top10">Top 10</option>
-            <option value="top50">Top 50</option>
-            <option value="51-100">51-100</option>
-          </select>
-          <select
-            value={intentFilter}
-            onChange={e => { setIntentFilter(e.target.value); setPage(1) }}
-            className="px-3 py-2 rounded-lg bg-bg-darkest border border-border text-sm text-fg-muted focus:outline-none focus:border-accent transition-colors"
-          >
+          <div className="flex gap-2">
+            <select
+              value={posFilter}
+              onChange={e => { setPosFilter(e.target.value); setPage(1) }}
+              className="flex-1 sm:flex-none px-3 py-2.5 rounded-lg bg-bg-darkest border border-border text-sm text-fg-muted focus:outline-none focus:border-accent transition-colors"
+            >
+              <option value="all">All Positions</option>
+              <option value="top3">Top 3</option>
+              <option value="top10">Top 10</option>
+              <option value="top50">Top 50</option>
+              <option value="51-100">51-100</option>
+            </select>
+            <select
+              value={intentFilter}
+              onChange={e => { setIntentFilter(e.target.value); setPage(1) }}
+              className="flex-1 sm:flex-none px-3 py-2.5 rounded-lg bg-bg-darkest border border-border text-sm text-fg-muted focus:outline-none focus:border-accent transition-colors"
+            >
             <option value="all">All Intents</option>
             <option value="informational">Informational</option>
             <option value="commercial">Commercial</option>
             <option value="transactional">Transactional</option>
             <option value="navigational">Navigational</option>
           </select>
+          </div>
         </div>
       </motion.div>
 
@@ -200,7 +216,53 @@ export default function KeywordsPage() {
         transition={{ duration: 0.4, delay: 0.3 }}
         className="bg-bg-card border border-border rounded-xl overflow-hidden"
       >
-        <div className="overflow-x-auto">
+        {/* Mobile card view */}
+        <div className="md:hidden divide-y divide-border">
+          {paginated.map((kw) => (
+            <div key={kw.keyword} className="p-3.5 space-y-2">
+              <div className="flex items-start justify-between">
+                <div>
+                  <span className="text-sm font-medium text-fg">{kw.keyword}</span>
+                  <span className={`ml-1.5 text-[10px] px-1.5 py-0.5 rounded-full font-medium ${
+                    kw.intent === 'informational' ? 'bg-blue-500/15 text-blue-400' :
+                    kw.intent === 'commercial' ? 'bg-purple-500/15 text-purple-400' :
+                    kw.intent === 'transactional' ? 'bg-green-500/15 text-green-400' :
+                    'bg-orange-500/15 text-orange-400'
+                  }`}>{kw.intent.charAt(0).toUpperCase()}</span>
+                </div>
+                <div className="text-right">
+                  <span className="text-base font-bold text-fg">#{kw.position}</span>
+                  {kw.change !== 0 && (
+                    <span className={`ml-1 text-xs font-medium ${kw.change > 0 ? 'text-green' : 'text-red'}`}>
+                      {kw.change > 0 ? '\u2191' : '\u2193'}{Math.abs(kw.change)}
+                    </span>
+                  )}
+                </div>
+              </div>
+              <div className="flex items-center gap-4 text-xs text-fg-muted">
+                <span>Vol: {kw.volume.toLocaleString()}</span>
+                <span>CPC: ${kw.cpc.toFixed(2)}</span>
+                <span className="flex items-center gap-1">
+                  KD:
+                  <span className="font-medium" style={{ color: getDifficultyColor(kw.difficulty) }}>{kw.difficulty}</span>
+                </span>
+              </div>
+              <div className="flex items-center justify-between">
+                <div className="flex flex-wrap gap-1">
+                  {kw.serpFeatures.slice(0, 3).map(f => (
+                    <span key={f} className="text-[10px] px-1.5 py-0.5 rounded bg-accent/10 text-accent-light font-medium touch-target-reset">
+                      {serpFeatureLabels[f] || f}
+                    </span>
+                  ))}
+                </div>
+                <MiniSparkline data={kw.trend} up={kw.change >= 0} />
+              </div>
+            </div>
+          ))}
+        </div>
+
+        {/* Desktop table view */}
+        <div className="hidden md:block overflow-x-auto table-scroll">
           <table className="w-full text-sm min-w-[900px]">
             <thead>
               <tr className="text-xs font-semibold tracking-wider uppercase text-fg-dim border-b border-border">
@@ -264,23 +326,23 @@ export default function KeywordsPage() {
         </div>
 
         {/* Pagination */}
-        <div className="flex items-center justify-between px-5 py-3 border-t border-border">
-          <p className="text-xs text-fg-dim">
-            Showing {(page - 1) * ITEMS_PER_PAGE + 1}–{Math.min(page * ITEMS_PER_PAGE, filtered.length)} of {filtered.length}
+        <div className="flex items-center justify-between px-4 md:px-5 py-3 border-t border-border">
+          <p className="text-[11px] md:text-xs text-fg-dim">
+            {(page - 1) * ITEMS_PER_PAGE + 1}–{Math.min(page * ITEMS_PER_PAGE, filtered.length)} of {filtered.length}
           </p>
-          <div className="flex items-center gap-1">
+          <div className="flex items-center gap-0.5 md:gap-1">
             <button
               onClick={() => setPage(p => Math.max(1, p - 1))}
               disabled={page === 1}
-              className="px-2.5 py-1.5 rounded-lg text-xs font-medium text-fg-muted hover:text-fg hover:bg-white/[0.04] disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+              className="px-2 md:px-2.5 py-1.5 rounded-lg text-xs font-medium text-fg-muted hover:text-fg hover:bg-white/[0.04] disabled:opacity-30 disabled:cursor-not-allowed transition-colors touch-target-reset"
             >
-              ← Prev
+              {'\u2190'}
             </button>
             {Array.from({ length: totalPages }, (_, i) => i + 1).map(p => (
               <button
                 key={p}
                 onClick={() => setPage(p)}
-                className={`w-8 h-8 rounded-lg text-xs font-medium transition-colors ${
+                className={`w-8 h-8 rounded-lg text-xs font-medium transition-colors touch-target-reset ${
                   page === p ? 'bg-accent text-white' : 'text-fg-muted hover:text-fg hover:bg-white/[0.04]'
                 }`}
               >
@@ -290,9 +352,9 @@ export default function KeywordsPage() {
             <button
               onClick={() => setPage(p => Math.min(totalPages, p + 1))}
               disabled={page === totalPages}
-              className="px-2.5 py-1.5 rounded-lg text-xs font-medium text-fg-muted hover:text-fg hover:bg-white/[0.04] disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+              className="px-2 md:px-2.5 py-1.5 rounded-lg text-xs font-medium text-fg-muted hover:text-fg hover:bg-white/[0.04] disabled:opacity-30 disabled:cursor-not-allowed transition-colors touch-target-reset"
             >
-              Next →
+              {'\u2192'}
             </button>
           </div>
         </div>

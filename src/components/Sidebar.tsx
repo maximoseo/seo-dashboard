@@ -1,3 +1,5 @@
+import { useEffect } from 'react'
+import { motion, AnimatePresence } from 'framer-motion'
 import { useSEO } from '@/contexts/SEOContext'
 
 const navItems = [
@@ -15,13 +17,23 @@ const navItems = [
 interface SidebarProps {
   activeNav: string
   onNavChange: (name: string) => void
+  mobileOpen?: boolean
+  onMobileClose?: () => void
 }
 
-export default function Sidebar({ activeNav, onNavChange }: SidebarProps) {
+export default function Sidebar({ activeNav, onNavChange, mobileOpen = false, onMobileClose }: SidebarProps) {
   const { domain } = useSEO()
 
-  return (
-    <aside className="hidden lg:flex fixed left-0 top-0 bottom-0 w-[220px] bg-bg-sidebar border-r border-border flex-col z-30">
+  // Lock body scroll when mobile sidebar is open
+  useEffect(() => {
+    if (mobileOpen) {
+      document.body.style.overflow = 'hidden'
+      return () => { document.body.style.overflow = '' }
+    }
+  }, [mobileOpen])
+
+  const sidebarContent = (
+    <>
       {/* Logo */}
       <div className="px-5 py-5 flex items-center gap-2.5">
         <svg width="28" height="28" viewBox="0 0 28 28" fill="none">
@@ -36,19 +48,22 @@ export default function Sidebar({ activeNav, onNavChange }: SidebarProps) {
       </div>
 
       {/* Nav Items */}
-      <nav className="flex-1 px-3 mt-2 space-y-0.5 overflow-y-auto">
+      <nav className="flex-1 px-3 mt-1 space-y-0.5 overflow-y-auto">
         {navItems.map((item) => {
           const isActive = activeNav === item.name
           return (
             <button
               key={item.name}
               onClick={() => onNavChange(item.name)}
-              className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-all duration-150 relative ${
+              className={`w-full flex items-center gap-3 px-3 py-3 rounded-lg text-[13px] font-medium transition-all duration-150 relative touch-target-reset ${
                 isActive
-                  ? 'bg-accent/15 text-accent-light'
+                  ? 'bg-accent/12 text-accent-light'
                   : 'text-fg-muted hover:text-fg hover:bg-white/[0.04]'
               }`}
             >
+              {isActive && (
+                <div className="absolute left-0 top-1/2 -translate-y-1/2 w-[3px] h-5 bg-accent rounded-r-full" />
+              )}
               <item.icon active={isActive} />
               <span>{item.name}</span>
               {item.badge && (
@@ -63,14 +78,14 @@ export default function Sidebar({ activeNav, onNavChange }: SidebarProps) {
 
       {/* Project Selector */}
       <div className="px-3 mb-3">
-        <button className="w-full flex items-center gap-2.5 px-3 py-2.5 rounded-lg border border-border hover:border-border-light transition-colors text-sm">
-          <div className="w-7 h-7 rounded-full bg-accent/20 flex items-center justify-center">
-            <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
-              <circle cx="7" cy="7" r="6" stroke="#60A5FA" strokeWidth="1.5" />
-              <circle cx="7" cy="7" r="2" fill="#60A5FA" />
+        <button className="w-full flex items-center gap-2.5 px-3 py-2.5 rounded-lg border border-border hover:border-border-light transition-colors text-sm touch-target-reset">
+          <div className="w-8 h-8 rounded-lg bg-accent/15 flex items-center justify-center">
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+              <circle cx="8" cy="8" r="6" stroke="#60A5FA" strokeWidth="1.5" />
+              <circle cx="8" cy="8" r="2" fill="#60A5FA" />
             </svg>
           </div>
-          <span className="text-fg-muted truncate flex-1 text-left">{domain}</span>
+          <span className="text-fg-muted truncate flex-1 text-left text-[13px]">{domain}</span>
           <svg width="12" height="12" viewBox="0 0 12 12" fill="none" className="text-fg-dim shrink-0">
             <path d="M3 5l3 3 3-3" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
           </svg>
@@ -85,8 +100,8 @@ export default function Sidebar({ activeNav, onNavChange }: SidebarProps) {
 
       {/* User Profile */}
       <div className="px-3 pb-4">
-        <button className="w-full flex items-center gap-2.5 px-3 py-2.5 rounded-lg hover:bg-white/[0.04] transition-colors">
-          <div className="w-8 h-8 rounded-full bg-accent flex items-center justify-center text-white text-sm font-semibold">
+        <button className="w-full flex items-center gap-2.5 px-3 py-2.5 rounded-lg hover:bg-white/[0.04] transition-colors touch-target-reset">
+          <div className="w-8 h-8 rounded-full bg-gradient-to-br from-accent to-accent-light flex items-center justify-center text-white text-sm font-semibold shadow-lg shadow-accent/20">
             M
           </div>
           <div className="flex-1 text-left min-w-0">
@@ -98,7 +113,50 @@ export default function Sidebar({ activeNav, onNavChange }: SidebarProps) {
           </svg>
         </button>
       </div>
-    </aside>
+    </>
+  )
+
+  return (
+    <>
+      {/* Desktop Sidebar */}
+      <aside className="hidden lg:flex fixed left-0 top-0 bottom-0 w-[232px] bg-bg-sidebar border-r border-border flex-col z-30">
+        {sidebarContent}
+      </aside>
+
+      {/* Mobile Sidebar Drawer */}
+      <AnimatePresence>
+        {mobileOpen && (
+          <>
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              transition={{ duration: 0.2 }}
+              className="lg:hidden fixed inset-0 z-50 backdrop-overlay"
+              onClick={onMobileClose}
+            />
+            <motion.aside
+              initial={{ x: -280 }}
+              animate={{ x: 0 }}
+              exit={{ x: -280 }}
+              transition={{ type: 'spring', damping: 30, stiffness: 300 }}
+              className="lg:hidden fixed left-0 top-0 bottom-0 w-[280px] bg-bg-sidebar border-r border-border flex flex-col z-50 safe-area-pt"
+            >
+              {/* Close button */}
+              <button
+                onClick={onMobileClose}
+                className="absolute top-4 right-4 w-8 h-8 flex items-center justify-center rounded-lg text-fg-dim hover:text-fg hover:bg-white/[0.06] transition-colors touch-target-reset"
+              >
+                <svg width="18" height="18" viewBox="0 0 18 18" fill="none">
+                  <path d="M4 4l10 10M14 4L4 14" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+                </svg>
+              </button>
+              {sidebarContent}
+            </motion.aside>
+          </>
+        )}
+      </AnimatePresence>
+    </>
   )
 }
 
