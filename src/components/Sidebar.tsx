@@ -1,6 +1,7 @@
-import { useEffect } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { useSEO } from '@/contexts/SEOContext'
+import { fetchSites, addSite, deleteSite, type SiteRecord } from '@/services/sitesApi'
 
 const navItems = [
   { name: 'Dashboard', icon: DashboardIcon },
@@ -22,7 +23,52 @@ interface SidebarProps {
 }
 
 export default function Sidebar({ activeNav, onNavChange, mobileOpen = false, onMobileClose }: SidebarProps) {
-  const { domain } = useSEO()
+  const { domain, setDomain } = useSEO()
+  const [sites, setSites] = useState<SiteRecord[]>([])
+  const [showSitePicker, setShowSitePicker] = useState(false)
+  const [showAddForm, setShowAddForm] = useState(false)
+  const [newName, setNewName] = useState('')
+  const [newDomain, setNewDomain] = useState('')
+  const [addError, setAddError] = useState('')
+
+  const loadSites = useCallback(async () => {
+    try {
+      const data = await fetchSites()
+      setSites(data)
+    } catch {
+      // silently fail
+    }
+  }, [])
+
+  useEffect(() => { loadSites() }, [loadSites])
+
+  const handleAddSite = async () => {
+    if (!newName || !newDomain) return
+    setAddError('')
+    try {
+      await addSite(newName, newDomain)
+      setNewName('')
+      setNewDomain('')
+      setShowAddForm(false)
+      await loadSites()
+    } catch (e) {
+      setAddError(e instanceof Error ? e.message : 'Failed to add site')
+    }
+  }
+
+  const handleDeleteSite = async (id: string) => {
+    try {
+      await deleteSite(id)
+      await loadSites()
+    } catch {
+      // silently fail
+    }
+  }
+
+  const handleSelectSite = (site: SiteRecord) => {
+    setDomain(site.domain)
+    setShowSitePicker(false)
+  }
 
   // Lock body scroll when mobile sidebar is open
   useEffect(() => {
@@ -76,9 +122,12 @@ export default function Sidebar({ activeNav, onNavChange, mobileOpen = false, on
         })}
       </nav>
 
-      {/* Project Selector */}
-      <div className="px-3 mb-3">
-        <button className="w-full flex items-center gap-2.5 px-3 py-2.5 rounded-lg border border-border hover:border-border-light transition-colors text-sm touch-target-reset">
+      {/* Site Switcher */}
+      <div className="px-3 mb-3 relative">
+        <button
+          onClick={() => setShowSitePicker(!showSitePicker)}
+          className="w-full flex items-center gap-2.5 px-3 py-2.5 rounded-lg border border-border hover:border-border-light transition-colors text-sm touch-target-reset"
+        >
           <div className="w-8 h-8 rounded-lg bg-accent/15 flex items-center justify-center">
             <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
               <circle cx="8" cy="8" r="6" stroke="#60A5FA" strokeWidth="1.5" />
@@ -86,10 +135,101 @@ export default function Sidebar({ activeNav, onNavChange, mobileOpen = false, on
             </svg>
           </div>
           <span className="text-fg-muted truncate flex-1 text-left text-[13px]">{domain}</span>
-          <svg width="12" height="12" viewBox="0 0 12 12" fill="none" className="text-fg-dim shrink-0">
+          <svg width="12" height="12" viewBox="0 0 12 12" fill="none" className={`text-fg-dim shrink-0 transition-transform ${showSitePicker ? 'rotate-180' : ''}`}>
             <path d="M3 5l3 3 3-3" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
           </svg>
         </button>
+
+        {showSitePicker && (
+          <>
+            <div className="fixed inset-0 z-40" onClick={() => { setShowSitePicker(false); setShowAddForm(false) }} />
+            <div className="absolute bottom-full left-0 right-0 mb-1 bg-bg-card border border-border rounded-lg shadow-xl z-50 overflow-hidden">
+              <div className="p-2 border-b border-border">
+                <p className="text-[10px] uppercase tracking-wider text-fg-dim font-semibold px-2 py-1">
+                  Sites ({sites.length})
+                </p>
+              </div>
+              <div className="max-h-48 overflow-y-auto">
+                {sites.map(site => (
+                  <div
+                    key={site.id}
+                    className={`flex items-center gap-2 px-3 py-2 cursor-pointer transition-colors ${
+                      site.domain === domain
+                        ? 'bg-accent/10 text-accent-light'
+                        : 'text-fg-muted hover:text-fg hover:bg-white/[0.04]'
+                    }`}
+                  >
+                    <button
+                      className="flex-1 text-left min-w-0"
+                      onClick={() => handleSelectSite(site)}
+                    >
+                      <p className="text-sm font-medium truncate">{site.name}</p>
+                      <p className="text-[11px] text-fg-dim truncate">{site.domain}</p>
+                    </button>
+                    {site.domain !== domain && (
+                      <button
+                        onClick={() => handleDeleteSite(site.id)}
+                        className="shrink-0 p-1 rounded hover:bg-red-500/20 text-fg-dim hover:text-red-400 transition-colors"
+                        title="Remove site"
+                      >
+                        <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
+                          <path d="M3 3l6 6M9 3l-6 6" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+                        </svg>
+                      </button>
+                    )}
+                  </div>
+                ))}
+              </div>
+
+              {/* Add site form */}
+              {showAddForm ? (
+                <div className="p-3 border-t border-border space-y-2">
+                  <input
+                    type="text"
+                    placeholder="Site name"
+                    value={newName}
+                    onChange={e => setNewName(e.target.value)}
+                    className="w-full bg-bg-darkest border border-border rounded px-2 py-1.5 text-xs text-fg placeholder:text-fg-dim focus:outline-none focus:border-accent"
+                    autoFocus
+                  />
+                  <input
+                    type="text"
+                    placeholder="domain.com"
+                    value={newDomain}
+                    onChange={e => setNewDomain(e.target.value)}
+                    className="w-full bg-bg-darkest border border-border rounded px-2 py-1.5 text-xs text-fg placeholder:text-fg-dim focus:outline-none focus:border-accent"
+                  />
+                  {addError && <p className="text-[10px] text-red-400">{addError}</p>}
+                  <div className="flex gap-2">
+                    <button
+                      onClick={() => { setShowAddForm(false); setAddError('') }}
+                      className="flex-1 text-xs text-fg-dim hover:text-fg py-1.5 rounded border border-border"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      onClick={handleAddSite}
+                      disabled={!newName || !newDomain}
+                      className="flex-1 text-xs bg-accent hover:bg-accent/80 text-white py-1.5 rounded disabled:opacity-40"
+                    >
+                      Add Site
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <button
+                  onClick={() => setShowAddForm(true)}
+                  className="w-full flex items-center gap-2 px-3 py-2.5 border-t border-border text-sm text-accent hover:bg-accent/5 transition-colors"
+                >
+                  <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+                    <path d="M7 3v8M3 7h8" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+                  </svg>
+                  Add Site
+                </button>
+              )}
+            </div>
+          </>
+        )}
       </div>
 
       {/* Plan Info */}
@@ -106,11 +246,8 @@ export default function Sidebar({ activeNav, onNavChange, mobileOpen = false, on
           </div>
           <div className="flex-1 text-left min-w-0">
             <p className="text-sm font-medium text-fg truncate">Maximo SEO</p>
-            <p className="text-[11px] text-fg-dim truncate">maximo-seo.ai</p>
+            <p className="text-[11px] text-fg-dim truncate">{domain}</p>
           </div>
-          <svg width="12" height="12" viewBox="0 0 12 12" fill="none" className="text-fg-dim shrink-0">
-            <path d="M3 5l3 3 3-3" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
-          </svg>
         </button>
       </div>
     </>

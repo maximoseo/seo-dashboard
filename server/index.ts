@@ -4,6 +4,7 @@ import NodeCache from 'node-cache'
 import axios from 'axios'
 import path from 'path'
 import { fileURLToPath } from 'url'
+import sitesRouter from './sites.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
@@ -16,6 +17,9 @@ const historicalCache = new NodeCache({ stdTTL: 86400 })
 
 app.use(cors({ origin: ['http://localhost:5173', 'http://localhost:4173', 'https://seo-dashboard.maximo-seo.ai', 'https://seo-dashboard-gzb6.onrender.com', process.env.FRONTEND_URL || ''].filter(Boolean) }))
 app.use(express.json())
+
+// Sites management
+app.use(sitesRouter)
 
 // ─── Env vars ────────────────────────────────────────────────────────────────
 const AHREFS_API_KEY = process.env.AHREFS_API_KEY || process.env.AHREFS_API || ''
