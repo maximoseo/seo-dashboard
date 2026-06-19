@@ -126,16 +126,63 @@ select {
 }
 
 /* Card hover glow effect */
+.card-glow {
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3),
+              0 0 0 1px rgba(255, 255, 255, 0.03);
+}
 .card-glow:hover {
-  box-shadow: 0 0 0 1px rgba(59, 130, 246, 0.1),
-              0 4px 24px rgba(0, 0, 0, 0.25);
+  box-shadow: 0 0 0 1px rgba(59, 130, 246, 0.15),
+              0 4px 24px rgba(0, 0, 0, 0.4),
+              0 0 40px rgba(59, 130, 246, 0.06);
+  transform: translateY(-1px);
+}
+
+/* Glass card */
+.glass-card {
+  background: linear-gradient(135deg, rgba(13, 22, 36, 0.9), rgba(13, 22, 36, 0.6));
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
 }
 
 /* Glass effect for headers */
 .glass-header {
-  background: rgba(10, 15, 30, 0.85);
-  backdrop-filter: blur(20px) saturate(180%);
-  -webkit-backdrop-filter: blur(20px) saturate(180%);
+  background: linear-gradient(180deg, rgba(10, 15, 30, 0.92), rgba(10, 15, 30, 0.82));
+  backdrop-filter: blur(24px) saturate(180%);
+  -webkit-backdrop-filter: blur(24px) saturate(180%);
+  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.04),
+              0 4px 20px rgba(0, 0, 0, 0.3);
+}
+
+/* Gradient accent line */
+.gradient-line {
+  background: linear-gradient(90deg, #3B82F6, #8B5CF6, #EC4899, #3B82F6);
+  background-size: 200% 100%;
+  animation: shimmer 4s linear infinite;
+}
+
+@keyframes shimmer {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+
+/* Metric card accent variants */
+.metric-accent-blue { border-top: 2px solid #3B82F6; }
+.metric-accent-green { border-top: 2px solid #22C55E; }
+.metric-accent-purple { border-top: 2px solid #8B5CF6; }
+.metric-accent-amber { border-top: 2px solid #F59E0B; }
+
+/* Glow dot pulse */
+@keyframes pulse-glow {
+  0%, 100% { opacity: 1; box-shadow: 0 0 4px currentColor; }
+  50% { opacity: 0.6; box-shadow: 0 0 8px currentColor; }
+}
+.pulse-dot {
+  animation: pulse-glow 2s ease-in-out infinite;
+}
+
+/* Score ring glow */
+.score-glow {
+  filter: drop-shadow(0 0 8px rgba(59, 130, 246, 0.4));
 }
 
 /* Mobile-optimized table scrolling */

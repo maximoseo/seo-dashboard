@@ -120,6 +120,7 @@ export default function Sidebar({ activeNav, onNavChange, mobileOpen = false, on
     <>
       {/* Desktop Sidebar */}
       <aside className="hidden lg:flex fixed left-0 top-0 bottom-0 w-[232px] bg-bg-sidebar border-r border-border flex-col z-30">
+        <div className="h-[2px] gradient-line" />
         {sidebarContent}
       </aside>
 

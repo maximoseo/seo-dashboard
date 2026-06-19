@@ -19,8 +19,11 @@ export default function SEOHealthScore() {
       initial={{ opacity: 0, y: 20 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.4, delay: 0.1 }}
-      className="bg-bg-card border border-border rounded-xl p-4 md:p-5 hover:border-border-light transition-all card-glow"
+      className="bg-bg-card border border-border rounded-xl p-4 md:p-5 hover:border-border-light transition-all card-glow relative overflow-hidden"
     >
+      {/* Background glow */}
+      <div className="absolute -top-12 -right-12 w-32 h-32 bg-blue-500/10 rounded-full blur-3xl pointer-events-none" />
+
       <div className="flex items-center gap-1.5 mb-3 md:mb-4">
         <h3 className="text-[11px] md:text-xs font-semibold tracking-wider uppercase text-fg-muted">SEO Health Score</h3>
         <InfoIcon />
@@ -29,7 +32,7 @@ export default function SEOHealthScore() {
       <div className="flex items-center gap-4 md:gap-5">
         {/* Circular Gauge */}
         <div className="relative w-[100px] h-[100px] md:w-[120px] md:h-[120px] shrink-0">
-          <svg width="100%" height="100%" viewBox="0 0 120 120" className="-rotate-90">
+          <svg width="100%" height="100%" viewBox="0 0 120 120" className="-rotate-90 score-glow">
             {/* Background track */}
             <circle
               cx="60"

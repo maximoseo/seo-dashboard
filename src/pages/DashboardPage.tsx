@@ -34,35 +34,46 @@ export default function DashboardPage() {
       {(dr !== undefined || semrushKeywords) && (
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 md:gap-3">
           {dr !== undefined && (
-            <div className="bg-bg-card border border-border rounded-xl p-3 md:p-3.5 hover:border-border-light transition-all card-glow">
+            <div className="bg-bg-card border border-border rounded-xl p-3 md:p-3.5 hover:border-border-light transition-all card-glow relative overflow-hidden">
+              <div className="absolute inset-0 bg-gradient-to-br from-orange-500/5 to-transparent pointer-events-none" />
+              <div className="relative">
               <div className="flex items-center justify-between mb-1.5">
                 <span className="text-[11px] md:text-xs text-fg-dim">Domain Rating</span>
                 <span className="text-[9px] md:text-[10px] bg-orange-500/20 text-orange-300 border border-orange-500/30 px-1.5 py-0.5 rounded-md font-medium touch-target-reset">Ahrefs</span>
               </div>
               <p className="text-xl md:text-2xl font-bold text-fg">{dr}</p>
               {ahrefsRank && <p className="text-[11px] text-fg-dim mt-0.5">AR #{ahrefsRank?.toLocaleString()}</p>}
+              </div>
             </div>
           )}
           {semrushKeywords && (
-            <div className="bg-bg-card border border-border rounded-xl p-3 md:p-3.5 hover:border-border-light transition-all card-glow">
+            <div className="bg-bg-card border border-border rounded-xl p-3 md:p-3.5 hover:border-border-light transition-all card-glow relative overflow-hidden">
+              <div className="absolute inset-0 bg-gradient-to-br from-orange-400/5 to-transparent pointer-events-none" />
+              <div className="relative">
               <div className="flex items-center justify-between mb-1.5">
                 <span className="text-[11px] md:text-xs text-fg-dim">Organic Keywords</span>
                 <span className="text-[9px] md:text-[10px] bg-orange-400/20 text-orange-200 border border-orange-400/30 px-1.5 py-0.5 rounded-md font-medium touch-target-reset">SEMrush</span>
               </div>
               <p className="text-xl md:text-2xl font-bold text-fg">{parseInt(semrushKeywords || '0').toLocaleString()}</p>
+              </div>
             </div>
           )}
           {semrushTraffic && (
-            <div className="bg-bg-card border border-border rounded-xl p-3 md:p-3.5 hover:border-border-light transition-all card-glow">
+            <div className="bg-bg-card border border-border rounded-xl p-3 md:p-3.5 hover:border-border-light transition-all card-glow relative overflow-hidden">
+              <div className="absolute inset-0 bg-gradient-to-br from-orange-400/5 to-transparent pointer-events-none" />
+              <div className="relative">
               <div className="flex items-center justify-between mb-1.5">
                 <span className="text-[11px] md:text-xs text-fg-dim">Organic Traffic</span>
                 <span className="text-[9px] md:text-[10px] bg-orange-400/20 text-orange-200 border border-orange-400/30 px-1.5 py-0.5 rounded-md font-medium touch-target-reset">SEMrush</span>
               </div>
               <p className="text-xl md:text-2xl font-bold text-fg">{parseInt(semrushTraffic || '0').toLocaleString()}</p>
+              </div>
             </div>
           )}
           {overview?.sources?.dataforseo && (
-            <div className="bg-bg-card border border-border rounded-xl p-3 md:p-3.5 hover:border-border-light transition-all card-glow">
+            <div className="bg-bg-card border border-border rounded-xl p-3 md:p-3.5 hover:border-border-light transition-all card-glow relative overflow-hidden">
+              <div className="absolute inset-0 bg-gradient-to-br from-purple-500/5 to-transparent pointer-events-none" />
+              <div className="relative">
               <div className="flex items-center justify-between mb-1.5">
                 <span className="text-[11px] md:text-xs text-fg-dim">Backlinks</span>
                 <span className="text-[9px] md:text-[10px] bg-purple-500/20 text-purple-300 border border-purple-500/30 px-1.5 py-0.5 rounded-md font-medium touch-target-reset">DataForSEO</span>
@@ -70,6 +81,7 @@ export default function DashboardPage() {
               <p className="text-xl md:text-2xl font-bold text-fg">
                 {(overview.sources.dataforseo?.backlinks || 0).toLocaleString()}
               </p>
+              </div>
             </div>
           )}
         </div>

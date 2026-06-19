@@ -56,8 +56,10 @@ export default function OrganicTrafficChart({ dateRange, onDateRangeChange }: Pr
       initial={{ opacity: 0, y: 20 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.4, delay: 0.3 }}
-      className="bg-bg-card border border-border rounded-xl p-4 md:p-5 hover:border-border-light transition-all card-glow"
+      className="bg-bg-card border border-border rounded-xl p-4 md:p-5 hover:border-border-light transition-all card-glow relative overflow-hidden"
     >
+      {/* Subtle gradient overlay */}
+      <div className="absolute top-0 right-0 w-48 h-48 bg-gradient-to-bl from-blue-500/5 to-transparent pointer-events-none rounded-xl" />
       <div className="flex items-center justify-between mb-3 md:mb-4">
         <div className="flex items-center gap-1.5">
           <h3 className="text-[11px] md:text-xs font-semibold tracking-wider uppercase text-fg-muted">Organic Traffic</h3>
