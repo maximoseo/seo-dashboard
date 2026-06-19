@@ -78,19 +78,31 @@ export default function PagesPage() {
   ]
 
   return (
-    <div className="space-y-5">
+    <div className="space-y-4 lg:space-y-5">
+      {/* Header with source badges */}
+      <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2">
+        <div>
+          <h2 className="text-base md:text-lg font-semibold text-fg">Pages Analysis</h2>
+          <p className="text-xs md:text-sm text-fg-muted mt-0.5">Crawled pages with on-page audit data</p>
+        </div>
+        <div className="flex gap-1.5 flex-wrap">
+          <span className="text-[11px] md:text-xs bg-purple-500/20 text-purple-300 border border-purple-500/30 px-2 py-1 rounded touch-target-reset">DataForSEO</span>
+          <span className="text-[11px] md:text-xs bg-teal-500/20 text-teal-300 border border-teal-500/30 px-2 py-1 rounded touch-target-reset">Browserless</span>
+        </div>
+      </div>
+
       {/* Summary Cards */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 md:gap-4">
         {summaryCards.map((card, i) => (
           <motion.div
             key={card.label}
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.4, delay: i * 0.05 }}
-            className="bg-bg-card border border-border rounded-xl p-5 hover:border-border-light transition-colors"
+            className="bg-bg-card border border-border rounded-xl p-3.5 md:p-5 hover:border-border-light transition-colors card-glow"
           >
-            <p className="text-xs font-semibold tracking-wider uppercase text-fg-muted">{card.label}</p>
-            <p className={`text-3xl font-bold mt-1 ${card.color}`}>{card.value}</p>
+            <p className="text-[11px] md:text-xs font-semibold tracking-wider uppercase text-fg-muted">{card.label}</p>
+            <p className={`text-2xl md:text-3xl font-bold mt-1 ${card.color}`}>{card.value}</p>
           </motion.div>
         ))}
       </div>
@@ -100,10 +112,10 @@ export default function PagesPage() {
         initial={{ opacity: 0, y: 20 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ duration: 0.4, delay: 0.2 }}
-        className="bg-bg-card border border-border rounded-xl p-4"
+        className="bg-bg-card border border-border rounded-xl p-3.5 md:p-4 card-glow"
       >
-        <div className="flex flex-wrap items-center gap-3">
-          <div className="relative flex-1 min-w-[200px]">
+        <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2.5 sm:gap-3">
+          <div className="relative flex-1 min-w-0 sm:min-w-[200px]">
             <svg width="16" height="16" viewBox="0 0 16 16" fill="none" className="absolute left-3 top-1/2 -translate-y-1/2 text-fg-dim">
               <circle cx="7" cy="7" r="5" stroke="currentColor" strokeWidth="1.5" />
               <path d="M11 11l3 3" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
@@ -113,13 +125,13 @@ export default function PagesPage() {
               placeholder="Search by URL or title..."
               value={search}
               onChange={e => { setSearch(e.target.value); setPage(1) }}
-              className="w-full pl-9 pr-3 py-2 rounded-lg bg-bg-darkest border border-border text-sm text-fg placeholder:text-fg-dim focus:outline-none focus:border-accent transition-colors"
+              className="w-full pl-9 pr-3 py-2.5 rounded-lg bg-bg-darkest border border-border text-sm text-fg placeholder:text-fg-dim focus:outline-none focus:border-accent transition-colors"
             />
           </div>
           <select
             value={statusFilter}
             onChange={e => { setStatusFilter(e.target.value); setPage(1) }}
-            className="px-3 py-2 rounded-lg bg-bg-darkest border border-border text-sm text-fg-muted focus:outline-none focus:border-accent transition-colors"
+            className="px-3 py-2.5 rounded-lg bg-bg-darkest border border-border text-sm text-fg-muted focus:outline-none focus:border-accent transition-colors"
           >
             <option value="all">All Status</option>
             <option value="2xx">2xx Success</option>
@@ -129,7 +141,7 @@ export default function PagesPage() {
           <select
             value={typeFilter}
             onChange={e => { setTypeFilter(e.target.value); setPage(1) }}
-            className="px-3 py-2 rounded-lg bg-bg-darkest border border-border text-sm text-fg-muted focus:outline-none focus:border-accent transition-colors"
+            className="px-3 py-2.5 rounded-lg bg-bg-darkest border border-border text-sm text-fg-muted focus:outline-none focus:border-accent transition-colors"
           >
             <option value="all">All Types</option>
             <option value="page">Pages</option>
@@ -138,14 +150,86 @@ export default function PagesPage() {
         </div>
       </motion.div>
 
-      {/* Table */}
+      {/* Mobile Card View */}
+      <div className="md:hidden space-y-2.5">
+        {paginated.map((p) => {
+          const sc = getStatusColor(p.status)
+          const isExpanded = expandedUrl === p.url
+          return (
+            <motion.div
+              key={p.url}
+              initial={{ opacity: 0, y: 10 }}
+              animate={{ opacity: 1, y: 0 }}
+              className="bg-bg-card border border-border rounded-xl overflow-hidden card-glow"
+            >
+              <button
+                onClick={() => setExpandedUrl(isExpanded ? null : p.url)}
+                className="w-full text-left p-3.5 hover:bg-white/[0.02] transition-colors"
+              >
+                <div className="flex items-start justify-between gap-2 mb-1.5">
+                  <div className="min-w-0 flex-1">
+                    <p className="text-sm font-medium text-fg truncate">{p.url}</p>
+                    <p className="text-[11px] text-fg-dim truncate mt-0.5">{p.title}</p>
+                  </div>
+                  <span className={`inline-flex px-2 py-0.5 rounded-full text-[11px] font-semibold shrink-0 touch-target-reset ${sc.bg} ${sc.text}`}>{p.status}</span>
+                </div>
+                <div className="flex items-center gap-3 text-[11px] text-fg-dim mt-2">
+                  <span>Traffic: <span className="text-fg-muted font-medium">{p.traffic > 0 ? `${(p.traffic / 1000).toFixed(1)}K` : '—'}</span></span>
+                  <span>KWs: <span className="text-fg-muted font-medium">{p.keywords || '—'}</span></span>
+                  <span>BLs: <span className="text-fg-muted font-medium">{p.backlinks}</span></span>
+                </div>
+                {p.score > 0 && (
+                  <div className="flex items-center gap-2 mt-2">
+                    <div className="flex-1 h-1.5 bg-white/[0.06] rounded-full overflow-hidden">
+                      <div className="h-full rounded-full" style={{ width: `${p.score}%`, backgroundColor: getScoreColor(p.score) }} />
+                    </div>
+                    <span className="text-[11px] font-medium w-6 text-right" style={{ color: getScoreColor(p.score) }}>{p.score}</span>
+                  </div>
+                )}
+              </button>
+              <AnimatePresence>
+                {isExpanded && (
+                  <motion.div
+                    initial={{ height: 0, opacity: 0 }}
+                    animate={{ height: 'auto', opacity: 1 }}
+                    exit={{ height: 0, opacity: 0 }}
+                    transition={{ duration: 0.2 }}
+                    className="overflow-hidden"
+                  >
+                    <div className="px-3.5 pb-3.5 pt-0 grid grid-cols-2 gap-3 border-t border-border mt-0 pt-3">
+                      <div>
+                        <p className="text-[10px] uppercase tracking-wider text-fg-dim">Last Crawled</p>
+                        <p className="text-xs text-fg mt-0.5">{p.lastCrawled}</p>
+                      </div>
+                      <div>
+                        <p className="text-[10px] uppercase tracking-wider text-fg-dim">Word Count</p>
+                        <p className="text-xs text-fg mt-0.5">{p.wordCount > 0 ? p.wordCount.toLocaleString() : '—'}</p>
+                      </div>
+                      <div>
+                        <p className="text-[10px] uppercase tracking-wider text-fg-dim">Load Time</p>
+                        <p className="text-xs text-fg mt-0.5">{p.loadTime > 0 ? `${p.loadTime}s` : '—'}</p>
+                      </div>
+                      <div>
+                        <p className="text-[10px] uppercase tracking-wider text-fg-dim">Content Type</p>
+                        <p className="text-xs text-fg mt-0.5 capitalize">{p.contentType}</p>
+                      </div>
+                    </div>
+                  </motion.div>
+                )}
+              </AnimatePresence>
+            </motion.div>
+          )
+        })}
+      </div>
+
+      {/* Desktop Table */}
       <motion.div
         initial={{ opacity: 0, y: 20 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ duration: 0.4, delay: 0.3 }}
-        className="bg-bg-card border border-border rounded-xl overflow-hidden"
+        className="hidden md:block bg-bg-card border border-border rounded-xl overflow-hidden card-glow"
       >
-        <div className="overflow-x-auto">
+        <div className="overflow-x-auto table-scroll">
           <table className="w-full text-sm min-w-[800px]">
             <thead>
               <tr className="text-xs font-semibold tracking-wider uppercase text-fg-dim border-b border-border">
@@ -173,7 +257,7 @@ export default function PagesPage() {
                         <p className="text-xs text-fg-dim truncate max-w-[280px] mt-0.5">{p.title}</p>
                       </td>
                       <td className="py-3 px-3 text-center">
-                        <span className={`inline-flex px-2 py-0.5 rounded-full text-xs font-semibold ${sc.bg} ${sc.text}`}>{p.status}</span>
+                        <span className={`inline-flex px-2 py-0.5 rounded-full text-xs font-semibold touch-target-reset ${sc.bg} ${sc.text}`}>{p.status}</span>
                       </td>
                       <td className="py-3 px-3 text-right text-fg-muted">{p.traffic > 0 ? `${(p.traffic / 1000).toFixed(1)}K` : '—'}</td>
                       <td className="py-3 px-3 text-right text-fg-muted">{p.keywords || '—'}</td>
@@ -241,7 +325,7 @@ export default function PagesPage() {
             <button
               onClick={() => setPage(p => Math.max(1, p - 1))}
               disabled={page === 1}
-              className="px-2.5 py-1.5 rounded-lg text-xs font-medium text-fg-muted hover:text-fg hover:bg-white/[0.04] disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+              className="px-2.5 py-1.5 rounded-lg text-xs font-medium text-fg-muted hover:text-fg hover:bg-white/[0.04] disabled:opacity-30 disabled:cursor-not-allowed transition-colors touch-target-reset"
             >
               ← Prev
             </button>
@@ -249,7 +333,7 @@ export default function PagesPage() {
               <button
                 key={p}
                 onClick={() => setPage(p)}
-                className={`w-8 h-8 rounded-lg text-xs font-medium transition-colors ${
+                className={`w-8 h-8 rounded-lg text-xs font-medium transition-colors touch-target-reset ${
                   page === p ? 'bg-accent text-white' : 'text-fg-muted hover:text-fg hover:bg-white/[0.04]'
                 }`}
               >
@@ -259,13 +343,37 @@ export default function PagesPage() {
             <button
               onClick={() => setPage(p => Math.min(totalPages, p + 1))}
               disabled={page === totalPages}
-              className="px-2.5 py-1.5 rounded-lg text-xs font-medium text-fg-muted hover:text-fg hover:bg-white/[0.04] disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+              className="px-2.5 py-1.5 rounded-lg text-xs font-medium text-fg-muted hover:text-fg hover:bg-white/[0.04] disabled:opacity-30 disabled:cursor-not-allowed transition-colors touch-target-reset"
             >
               Next →
             </button>
           </div>
         </div>
       </motion.div>
+
+      {/* Mobile Pagination */}
+      <div className="md:hidden flex items-center justify-between px-1">
+        <p className="text-[11px] text-fg-dim">
+          {(page - 1) * ITEMS_PER_PAGE + 1}–{Math.min(page * ITEMS_PER_PAGE, filtered.length)} of {filtered.length}
+        </p>
+        <div className="flex items-center gap-1">
+          <button
+            onClick={() => setPage(p => Math.max(1, p - 1))}
+            disabled={page === 1}
+            className="px-3 py-2 rounded-lg text-xs font-medium text-fg-muted hover:text-fg hover:bg-white/[0.04] disabled:opacity-30 disabled:cursor-not-allowed transition-colors touch-target-reset"
+          >
+            ← Prev
+          </button>
+          <span className="text-xs text-fg-muted px-2">{page}/{totalPages}</span>
+          <button
+            onClick={() => setPage(p => Math.min(totalPages, p + 1))}
+            disabled={page === totalPages}
+            className="px-3 py-2 rounded-lg text-xs font-medium text-fg-muted hover:text-fg hover:bg-white/[0.04] disabled:opacity-30 disabled:cursor-not-allowed transition-colors touch-target-reset"
+          >
+            Next →
+          </button>
+        </div>
+      </div>
     </div>
   )
 }

@@ -29,45 +29,45 @@ export default function DashboardPage() {
   const semrushTraffic = semrush?.['Organic Traffic'] || semrush?.Ot
 
   return (
-    <div className="space-y-4 lg:space-y-5">
+    <div className="space-y-4 lg:space-y-5 max-w-[1400px]">
       {/* Multi-source overview strip */}
       {(dr !== undefined || semrushKeywords) && (
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 md:gap-3">
           {dr !== undefined && (
-            <div className="bg-bg-card border border-border rounded-xl p-3">
-              <div className="flex items-center justify-between mb-1">
-                <span className="text-xs text-fg-dim">Domain Rating</span>
-                <span className="text-[10px] bg-orange-500/20 text-orange-300 border border-orange-500/30 px-1.5 py-0.5 rounded">Ahrefs</span>
+            <div className="bg-bg-card border border-border rounded-xl p-3 md:p-3.5 hover:border-border-light transition-all card-glow">
+              <div className="flex items-center justify-between mb-1.5">
+                <span className="text-[11px] md:text-xs text-fg-dim">Domain Rating</span>
+                <span className="text-[9px] md:text-[10px] bg-orange-500/20 text-orange-300 border border-orange-500/30 px-1.5 py-0.5 rounded-md font-medium touch-target-reset">Ahrefs</span>
               </div>
-              <p className="text-2xl font-bold text-fg">{dr}</p>
-              {ahrefsRank && <p className="text-xs text-fg-dim mt-0.5">AR #{ahrefsRank?.toLocaleString()}</p>}
+              <p className="text-xl md:text-2xl font-bold text-fg">{dr}</p>
+              {ahrefsRank && <p className="text-[11px] text-fg-dim mt-0.5">AR #{ahrefsRank?.toLocaleString()}</p>}
             </div>
           )}
           {semrushKeywords && (
-            <div className="bg-bg-card border border-border rounded-xl p-3">
-              <div className="flex items-center justify-between mb-1">
-                <span className="text-xs text-fg-dim">Organic Keywords</span>
-                <span className="text-[10px] bg-orange-400/20 text-orange-200 border border-orange-400/30 px-1.5 py-0.5 rounded">SEMrush</span>
+            <div className="bg-bg-card border border-border rounded-xl p-3 md:p-3.5 hover:border-border-light transition-all card-glow">
+              <div className="flex items-center justify-between mb-1.5">
+                <span className="text-[11px] md:text-xs text-fg-dim">Organic Keywords</span>
+                <span className="text-[9px] md:text-[10px] bg-orange-400/20 text-orange-200 border border-orange-400/30 px-1.5 py-0.5 rounded-md font-medium touch-target-reset">SEMrush</span>
               </div>
-              <p className="text-2xl font-bold text-fg">{parseInt(semrushKeywords || '0').toLocaleString()}</p>
+              <p className="text-xl md:text-2xl font-bold text-fg">{parseInt(semrushKeywords || '0').toLocaleString()}</p>
             </div>
           )}
           {semrushTraffic && (
-            <div className="bg-bg-card border border-border rounded-xl p-3">
-              <div className="flex items-center justify-between mb-1">
-                <span className="text-xs text-fg-dim">Organic Traffic</span>
-                <span className="text-[10px] bg-orange-400/20 text-orange-200 border border-orange-400/30 px-1.5 py-0.5 rounded">SEMrush</span>
+            <div className="bg-bg-card border border-border rounded-xl p-3 md:p-3.5 hover:border-border-light transition-all card-glow">
+              <div className="flex items-center justify-between mb-1.5">
+                <span className="text-[11px] md:text-xs text-fg-dim">Organic Traffic</span>
+                <span className="text-[9px] md:text-[10px] bg-orange-400/20 text-orange-200 border border-orange-400/30 px-1.5 py-0.5 rounded-md font-medium touch-target-reset">SEMrush</span>
               </div>
-              <p className="text-2xl font-bold text-fg">{parseInt(semrushTraffic || '0').toLocaleString()}</p>
+              <p className="text-xl md:text-2xl font-bold text-fg">{parseInt(semrushTraffic || '0').toLocaleString()}</p>
             </div>
           )}
           {overview?.sources?.dataforseo && (
-            <div className="bg-bg-card border border-border rounded-xl p-3">
-              <div className="flex items-center justify-between mb-1">
-                <span className="text-xs text-fg-dim">Backlinks</span>
-                <span className="text-[10px] bg-purple-500/20 text-purple-300 border border-purple-500/30 px-1.5 py-0.5 rounded">DataForSEO</span>
+            <div className="bg-bg-card border border-border rounded-xl p-3 md:p-3.5 hover:border-border-light transition-all card-glow">
+              <div className="flex items-center justify-between mb-1.5">
+                <span className="text-[11px] md:text-xs text-fg-dim">Backlinks</span>
+                <span className="text-[9px] md:text-[10px] bg-purple-500/20 text-purple-300 border border-purple-500/30 px-1.5 py-0.5 rounded-md font-medium touch-target-reset">DataForSEO</span>
               </div>
-              <p className="text-2xl font-bold text-fg">
+              <p className="text-xl md:text-2xl font-bold text-fg">
                 {(overview.sources.dataforseo?.backlinks || 0).toLocaleString()}
               </p>
             </div>
@@ -75,22 +75,28 @@ export default function DashboardPage() {
         </div>
       )}
 
-      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-5 gap-4 lg:gap-5">
-        <SEOHealthScore />
-        <MetricCards />
+      <div className="grid grid-cols-2 md:grid-cols-2 xl:grid-cols-5 gap-3 md:gap-4 lg:gap-5">
+        <div className="col-span-2 md:col-span-2 xl:col-span-1">
+          <SEOHealthScore />
+        </div>
+        <div className="col-span-2 md:col-span-2 xl:col-span-4 grid grid-cols-2 xl:grid-cols-4 gap-3 md:gap-4 lg:gap-5">
+          <MetricCards />
+        </div>
       </div>
 
-      <div className="grid grid-cols-1 xl:grid-cols-3 gap-4 lg:gap-5">
+      <div className="grid grid-cols-1 xl:grid-cols-3 gap-3 md:gap-4 lg:gap-5">
         <div className="xl:col-span-2">
           <OrganicTrafficChart dateRange={dateRange} onDateRangeChange={setDateRange} />
         </div>
         <TopPages />
       </div>
 
-      <div className="grid grid-cols-1 xl:grid-cols-3 gap-4 lg:gap-5">
+      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3 md:gap-4 lg:gap-5">
         <KeywordRankings />
         <CoreWebVitals />
-        <AlertsPanel />
+        <div className="md:col-span-2 xl:col-span-1">
+          <AlertsPanel />
+        </div>
       </div>
     </div>
   )

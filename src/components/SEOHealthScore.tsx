@@ -19,17 +19,17 @@ export default function SEOHealthScore() {
       initial={{ opacity: 0, y: 20 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.4, delay: 0.1 }}
-      className="bg-bg-card border border-border rounded-xl p-5 hover:border-border-light transition-colors"
+      className="bg-bg-card border border-border rounded-xl p-4 md:p-5 hover:border-border-light transition-all card-glow"
     >
-      <div className="flex items-center gap-1.5 mb-4">
-        <h3 className="text-xs font-semibold tracking-wider uppercase text-fg-muted">SEO Health Score</h3>
+      <div className="flex items-center gap-1.5 mb-3 md:mb-4">
+        <h3 className="text-[11px] md:text-xs font-semibold tracking-wider uppercase text-fg-muted">SEO Health Score</h3>
         <InfoIcon />
       </div>
 
-      <div className="flex items-center gap-4">
+      <div className="flex items-center gap-4 md:gap-5">
         {/* Circular Gauge */}
-        <div className="relative w-[120px] h-[120px] shrink-0">
-          <svg width="120" height="120" viewBox="0 0 120 120" className="-rotate-90">
+        <div className="relative w-[100px] h-[100px] md:w-[120px] md:h-[120px] shrink-0">
+          <svg width="100%" height="100%" viewBox="0 0 120 120" className="-rotate-90">
             {/* Background track */}
             <circle
               cx="60"
@@ -60,19 +60,19 @@ export default function SEOHealthScore() {
             </defs>
           </svg>
           <div className="absolute inset-0 flex flex-col items-center justify-center">
-            <span className="text-3xl font-bold text-fg">{animatedScore}</span>
-            <span className="text-sm text-fg-muted">/100</span>
+            <span className="text-2xl md:text-3xl font-bold text-fg">{animatedScore}</span>
+            <span className="text-xs md:text-sm text-fg-muted">/100</span>
           </div>
         </div>
 
         <div>
-          <p className="text-base font-semibold text-green">Excellent</p>
+          <p className="text-sm md:text-base font-semibold text-green">Excellent</p>
           {/* Mini trend line */}
           <svg width="80" height="24" viewBox="0 0 80 24" className="mt-2">
             <polyline
               points="0,20 10,18 20,16 30,17 40,14 50,12 60,10 70,8 80,6"
               fill="none"
-              stroke="#9CA3AF"
+              stroke="#94A3B8"
               strokeWidth="1.5"
               strokeLinecap="round"
               strokeLinejoin="round"

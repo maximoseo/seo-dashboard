@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import { Routes, Route, useNavigate, useLocation } from 'react-router-dom'
 import Sidebar from '@/components/Sidebar'
 import TopBar from '@/components/TopBar'
@@ -43,22 +44,35 @@ const pageTitles: Record<string, { title: string; subtitle: string }> = {
 export default function App() {
   const navigate = useNavigate()
   const location = useLocation()
+  const [sidebarOpen, setSidebarOpen] = useState(false)
   const activeNav = routeNavMap[location.pathname] || 'Dashboard'
   const pageInfo = pageTitles[location.pathname] || pageTitles['/']
 
   const handleNavChange = (name: string) => {
     const route = navRouteMap[name]
-    if (route) navigate(route)
+    if (route) {
+      navigate(route)
+      setSidebarOpen(false)
+    }
   }
 
   return (
     <div className="flex min-h-screen bg-bg-darkest">
-      <Sidebar activeNav={activeNav} onNavChange={handleNavChange} />
+      <Sidebar
+        activeNav={activeNav}
+        onNavChange={handleNavChange}
+        mobileOpen={sidebarOpen}
+        onMobileClose={() => setSidebarOpen(false)}
+      />
 
-      <main className="flex-1 lg:ml-[220px] pb-20 lg:pb-0">
-        <TopBar title={pageInfo.title} subtitle={pageInfo.subtitle} />
+      <main className="flex-1 lg:ml-[232px] pb-24 lg:pb-0">
+        <TopBar
+          title={pageInfo.title}
+          subtitle={pageInfo.subtitle}
+          onMenuClick={() => setSidebarOpen(true)}
+        />
 
-        <div className="px-4 lg:px-6 pb-6">
+        <div className="px-4 md:px-6 lg:px-8 py-5 lg:py-6">
           <Routes>
             <Route path="/" element={<DashboardPage />} />
             <Route path="/keywords" element={<KeywordsPage />} />

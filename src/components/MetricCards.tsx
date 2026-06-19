@@ -57,16 +57,16 @@ export default function MetricCards() {
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.4, delay: 0.15 + i * 0.05 }}
-          className="bg-bg-card border border-border rounded-xl p-5 hover:border-border-light transition-colors group"
+          className="bg-bg-card border border-border rounded-xl p-4 md:p-5 hover:border-border-light transition-all card-glow group"
         >
-          <div className="flex items-center gap-1.5 mb-3">
-            <h3 className="text-xs font-semibold tracking-wider uppercase text-fg-muted">{metric.label}</h3>
+          <div className="flex items-center gap-1.5 mb-2 md:mb-3">
+            <h3 className="text-[11px] md:text-xs font-semibold tracking-wider uppercase text-fg-muted">{metric.label}</h3>
             {loading && (
               <div className="w-3 h-3 border border-accent/40 border-t-accent rounded-full animate-spin" />
             )}
           </div>
 
-          <p className="text-3xl font-bold text-fg">{metric.value}</p>
+          <p className="text-2xl md:text-3xl font-bold text-fg">{metric.value}</p>
 
           <div className="flex items-center gap-2 mt-1.5">
             <span className={`text-sm font-medium ${metric.changeColor}`}>

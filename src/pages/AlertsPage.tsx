@@ -60,19 +60,33 @@ export default function AlertsPage() {
   ]
 
   return (
-    <div className="space-y-5">
+    <div className="space-y-4 lg:space-y-5">
+      {/* Header with source badges */}
+      <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2">
+        <div>
+          <h2 className="text-base md:text-lg font-semibold text-fg">Alerts & Notifications</h2>
+          <p className="text-xs md:text-sm text-fg-muted mt-0.5">Aggregated alerts from all monitoring sources</p>
+        </div>
+        <div className="flex gap-1.5 flex-wrap">
+          <span className="text-[11px] md:text-xs bg-orange-500/20 text-orange-300 border border-orange-500/30 px-2 py-1 rounded touch-target-reset">Ahrefs</span>
+          <span className="text-[11px] md:text-xs bg-green-500/20 text-green-300 border border-green-500/30 px-2 py-1 rounded touch-target-reset">PageSpeed</span>
+          <span className="text-[11px] md:text-xs bg-cyan-500/20 text-cyan-300 border border-cyan-500/30 px-2 py-1 rounded touch-target-reset">SE Ranking</span>
+          <span className="text-[11px] md:text-xs bg-purple-500/20 text-purple-300 border border-purple-500/30 px-2 py-1 rounded touch-target-reset">DataForSEO</span>
+        </div>
+      </div>
+
       {/* Summary Cards */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 md:gap-4">
         {summaryCards.map((card, i) => (
           <motion.div
             key={card.label}
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.4, delay: i * 0.05 }}
-            className="bg-bg-card border border-border rounded-xl p-5 hover:border-border-light transition-colors"
+            className="bg-bg-card border border-border rounded-xl p-3.5 md:p-5 hover:border-border-light transition-colors card-glow"
           >
-            <p className="text-xs font-semibold tracking-wider uppercase text-fg-muted">{card.label}</p>
-            <p className={`text-3xl font-bold mt-1 ${card.color}`}>{card.value}</p>
+            <p className="text-[11px] md:text-xs font-semibold tracking-wider uppercase text-fg-muted">{card.label}</p>
+            <p className={`text-2xl md:text-3xl font-bold mt-1 ${card.color}`}>{card.value}</p>
           </motion.div>
         ))}
       </div>
@@ -82,10 +96,10 @@ export default function AlertsPage() {
         initial={{ opacity: 0, y: 20 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ duration: 0.4, delay: 0.2 }}
-        className="bg-bg-card border border-border rounded-xl p-4"
+        className="bg-bg-card border border-border rounded-xl p-3.5 md:p-4 card-glow"
       >
-        <div className="flex flex-wrap items-center gap-3">
-          <div className="relative flex-1 min-w-[200px]">
+        <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2.5 sm:gap-3">
+          <div className="relative flex-1 min-w-0 sm:min-w-[200px]">
             <svg width="16" height="16" viewBox="0 0 16 16" fill="none" className="absolute left-3 top-1/2 -translate-y-1/2 text-fg-dim">
               <circle cx="7" cy="7" r="5" stroke="currentColor" strokeWidth="1.5" />
               <path d="M11 11l3 3" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
@@ -95,13 +109,13 @@ export default function AlertsPage() {
               placeholder="Search alerts..."
               value={search}
               onChange={e => setSearch(e.target.value)}
-              className="w-full pl-9 pr-3 py-2 rounded-lg bg-bg-darkest border border-border text-sm text-fg placeholder:text-fg-dim focus:outline-none focus:border-accent transition-colors"
+              className="w-full pl-9 pr-3 py-2.5 rounded-lg bg-bg-darkest border border-border text-sm text-fg placeholder:text-fg-dim focus:outline-none focus:border-accent transition-colors"
             />
           </div>
           <select
             value={severityFilter}
             onChange={e => setSeverityFilter(e.target.value)}
-            className="px-3 py-2 rounded-lg bg-bg-darkest border border-border text-sm text-fg-muted focus:outline-none focus:border-accent transition-colors"
+            className="px-3 py-2.5 rounded-lg bg-bg-darkest border border-border text-sm text-fg-muted focus:outline-none focus:border-accent transition-colors"
           >
             <option value="all">All Severity</option>
             <option value="critical">Critical</option>
@@ -111,7 +125,7 @@ export default function AlertsPage() {
           <select
             value={moduleFilter}
             onChange={e => setModuleFilter(e.target.value)}
-            className="px-3 py-2 rounded-lg bg-bg-darkest border border-border text-sm text-fg-muted focus:outline-none focus:border-accent transition-colors"
+            className="px-3 py-2.5 rounded-lg bg-bg-darkest border border-border text-sm text-fg-muted focus:outline-none focus:border-accent transition-colors"
           >
             <option value="all">All Modules</option>
             <option value="Rankings">Rankings</option>
@@ -127,7 +141,7 @@ export default function AlertsPage() {
         initial={{ opacity: 0, y: 20 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ duration: 0.4, delay: 0.3 }}
-        className="bg-bg-card border border-border rounded-xl overflow-hidden"
+        className="bg-bg-card border border-border rounded-xl overflow-hidden card-glow"
       >
         <div className="divide-y divide-border">
           {filtered.map(alert => {
@@ -137,7 +151,7 @@ export default function AlertsPage() {
               <div key={alert.id}>
                 <button
                   onClick={() => setExpandedId(isExpanded ? null : alert.id)}
-                  className={`w-full text-left flex items-start gap-4 px-5 py-4 hover:bg-white/[0.02] transition-colors ${
+                  className={`w-full text-left flex items-start gap-2.5 sm:gap-4 px-3.5 sm:px-5 py-3.5 sm:py-4 hover:bg-white/[0.02] transition-colors ${
                     alert.status === 'unread' ? 'bg-white/[0.01]' : ''
                   }`}
                 >
@@ -146,17 +160,17 @@ export default function AlertsPage() {
                   </div>
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2">
-                      <p className={`text-sm font-medium truncate ${alert.status === 'unread' ? 'text-fg' : 'text-fg-muted'}`}>{alert.title}</p>
+                      <p className={`text-xs md:text-sm font-medium truncate ${alert.status === 'unread' ? 'text-fg' : 'text-fg-muted'}`}>{alert.title}</p>
                       {alert.status === 'unread' && <div className="w-2 h-2 rounded-full bg-accent shrink-0" />}
                     </div>
-                    <p className="text-xs text-fg-dim mt-0.5 line-clamp-1">{alert.description}</p>
-                    <div className="flex items-center gap-2 mt-1.5">
-                      <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium ${config.bg} ${config.text}`}>{config.label}</span>
-                      <span className="text-[10px] px-1.5 py-0.5 rounded-full font-medium bg-accent/10 text-accent-light">{alert.module}</span>
-                      {alert.status === 'resolved' && <span className="text-[10px] px-1.5 py-0.5 rounded-full font-medium bg-green/15 text-green">Resolved</span>}
+                    <p className="text-[11px] md:text-xs text-fg-dim mt-0.5 line-clamp-1">{alert.description}</p>
+                    <div className="flex items-center gap-1.5 sm:gap-2 mt-1.5 flex-wrap">
+                      <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium touch-target-reset ${config.bg} ${config.text}`}>{config.label}</span>
+                      <span className="text-[10px] px-1.5 py-0.5 rounded-full font-medium bg-accent/10 text-accent-light touch-target-reset">{alert.module}</span>
+                      {alert.status === 'resolved' && <span className="text-[10px] px-1.5 py-0.5 rounded-full font-medium bg-green/15 text-green touch-target-reset">Resolved</span>}
                     </div>
                   </div>
-                  <span className="text-xs text-fg-dim shrink-0 mt-1">{alert.time}</span>
+                  <span className="text-[11px] md:text-xs text-fg-dim shrink-0 mt-1">{alert.time}</span>
                   <svg width="16" height="16" viewBox="0 0 16 16" fill="none" className={`text-fg-dim shrink-0 mt-1 transition-transform ${isExpanded ? 'rotate-90' : ''}`}>
                     <path d="M6 4l4 4-4 4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
                   </svg>
@@ -170,13 +184,13 @@ export default function AlertsPage() {
                       transition={{ duration: 0.2 }}
                       className="overflow-hidden"
                     >
-                      <div className="px-5 pb-4 pl-16">
-                        <p className="text-sm text-fg-muted leading-relaxed">{alert.detail}</p>
-                        <div className="flex items-center gap-2 mt-3">
+                      <div className="px-3.5 sm:px-5 pb-4 pl-12 sm:pl-16">
+                        <p className="text-xs md:text-sm text-fg-muted leading-relaxed">{alert.detail}</p>
+                        <div className="flex items-center gap-2 mt-3 flex-wrap">
                           {alert.status !== 'read' && alert.status !== 'resolved' && (
                             <button
                               onClick={(e) => { e.stopPropagation(); markAs(alert.id, 'read') }}
-                              className="px-3 py-1.5 rounded-lg text-xs font-medium bg-white/[0.06] text-fg-muted hover:text-fg hover:bg-white/[0.1] transition-colors"
+                              className="px-3 py-1.5 rounded-lg text-xs font-medium bg-white/[0.06] text-fg-muted hover:text-fg hover:bg-white/[0.1] transition-colors touch-target-reset"
                             >
                               Mark as Read
                             </button>
@@ -184,7 +198,7 @@ export default function AlertsPage() {
                           {alert.status !== 'resolved' && (
                             <button
                               onClick={(e) => { e.stopPropagation(); markAs(alert.id, 'resolved') }}
-                              className="px-3 py-1.5 rounded-lg text-xs font-medium bg-green/15 text-green hover:bg-green/25 transition-colors"
+                              className="px-3 py-1.5 rounded-lg text-xs font-medium bg-green/15 text-green hover:bg-green/25 transition-colors touch-target-reset"
                             >
                               Mark as Resolved
                             </button>
@@ -198,8 +212,8 @@ export default function AlertsPage() {
             )
           })}
           {filtered.length === 0 && (
-            <div className="px-5 py-12 text-center">
-              <p className="text-fg-muted text-sm">No alerts match your filters</p>
+            <div className="px-3.5 sm:px-5 py-12 text-center">
+              <p className="text-fg-muted text-xs md:text-sm">No alerts match your filters</p>
             </div>
           )}
         </div>
