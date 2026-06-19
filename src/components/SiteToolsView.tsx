@@ -3,10 +3,12 @@
 import { useState } from 'react';
 import type { Site, SiteMetrics } from '@/types';
 import { seoTools, toolCategories } from '@/lib/seo-tools';
+import { ToolRunner } from './ToolRunner';
 
 interface SiteToolsViewProps {
   site: Site;
   metrics: SiteMetrics;
+  toolStatuses: Record<string, boolean>;
 }
 
 type TabKey = 'overview' | 'serp' | 'keywords' | 'backlinks' | 'technical' | 'local' | 'content' | 'monitoring';
@@ -128,85 +130,17 @@ function QuickStat({ label, value, color }: { label: string; value: string; colo
   );
 }
 
-function ToolTab({ toolIds, site }: { toolIds: string[]; site: Site }) {
-  const tools = toolIds.map((id) => seoTools.find((t) => t.id === id)).filter(Boolean);
-
+function ToolTab({ toolIds, site, toolStatuses }: { toolIds: string[]; site: Site; toolStatuses: Record<string, boolean> }) {
   return (
     <div className="space-y-4">
-      {tools.map((tool) => {
-        if (!tool) return null;
-        const category = toolCategories[tool.category];
-        return (
-          <div key={tool.id} className="glass rounded-xl p-5">
-            <div className="flex items-start gap-4">
-              <div
-                className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl"
-                style={{ background: `${category.color}22` }}
-              >
-                <svg
-                  className="h-6 w-6"
-                  style={{ color: category.color }}
-                  fill="none"
-                  viewBox="0 0 24 24"
-                  stroke="currentColor"
-                  strokeWidth={1.5}
-                >
-                  <path strokeLinecap="round" strokeLinejoin="round" d={tool.icon} />
-                </svg>
-              </div>
-
-              <div className="flex-1 min-w-0">
-                <div className="flex items-center gap-2 mb-1">
-                  <h3 className="text-base font-semibold text-text-primary">{tool.name}</h3>
-                  <div className="flex items-center gap-1">
-                    <div className="h-2 w-2 rounded-full bg-emerald-400" />
-                    <span className="text-[10px] text-emerald-400">Connected</span>
-                  </div>
-                </div>
-                <p className="text-sm text-text-muted mb-3">{tool.description}</p>
-
-                <div className="mb-3">
-                  <p className="text-xs font-medium text-text-muted mb-1.5">Capabilities for {site.domain}:</p>
-                  <div className="flex flex-wrap gap-1.5">
-                    {tool.capabilities.map((cap) => (
-                      <span
-                        key={cap}
-                        className="rounded-md px-2 py-1 text-xs"
-                        style={{ background: `${category.color}15`, color: category.color }}
-                      >
-                        {cap}
-                      </span>
-                    ))}
-                  </div>
-                </div>
-
-                <div className="flex items-center gap-4 text-xs">
-                  <code className="text-primary-light/60">${tool.envVar}</code>
-                  {tool.docsUrl && (
-                    <a
-                      href={tool.docsUrl}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="font-medium text-primary-light underline decoration-primary-light/35 hover:decoration-primary-light"
-                    >
-                      API Documentation
-                    </a>
-                  )}
-                </div>
-              </div>
-
-              <button className="shrink-0 rounded-lg bg-primary/10 px-4 py-2 text-xs font-medium text-primary-light transition-all hover:bg-primary/20 hover:-translate-y-0.5 hover:shadow-glow">
-                Run Analysis
-              </button>
-            </div>
-          </div>
-        );
-      })}
+      {toolIds.map((id) => (
+        <ToolRunner key={id} site={site} toolId={id} toolStatuses={toolStatuses} />
+      ))}
     </div>
   );
 }
 
-export function SiteToolsView({ site, metrics }: SiteToolsViewProps) {
+export function SiteToolsView({ site, metrics, toolStatuses }: SiteToolsViewProps) {
   const [activeTab, setActiveTab] = useState<TabKey>('overview');
 
   return (
@@ -232,7 +166,7 @@ export function SiteToolsView({ site, metrics }: SiteToolsViewProps) {
 
       {activeTab === 'overview' && <OverviewTab site={site} metrics={metrics} />}
       {activeTab !== 'overview' && (
-        <ToolTab toolIds={tabToolMapping[activeTab]} site={site} />
+        <ToolTab toolIds={tabToolMapping[activeTab]} site={site} toolStatuses={toolStatuses} />
       )}
     </div>
   );
