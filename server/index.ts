@@ -14,16 +14,16 @@ const PORT = process.env.PORT || 3001
 const realtimeCache = new NodeCache({ stdTTL: 300 })
 const historicalCache = new NodeCache({ stdTTL: 86400 })
 
-app.use(cors({ origin: ['http://localhost:5173', 'http://localhost:4173', process.env.FRONTEND_URL || ''].filter(Boolean) }))
+app.use(cors({ origin: ['http://localhost:5173', 'http://localhost:4173', 'https://seo-dashboard.maximo-seo.ai', 'https://seo-dashboard-gzb6.onrender.com', process.env.FRONTEND_URL || ''].filter(Boolean) }))
 app.use(express.json())
 
 // ─── Env vars ────────────────────────────────────────────────────────────────
 const AHREFS_API_KEY = process.env.AHREFS_API_KEY || process.env.AHREFS_API || ''
-const SEMRUSH_API_KEY = process.env.SEMRUSH_API || ''
+const SEMRUSH_API_KEY = process.env.SEMRUSH_API || process.env.SEMRUSH_API_KEY || ''
 const DATAFORSEO_LOGIN = process.env.DATAFORSEO_LOGIN || ''
 const DATAFORSEO_PASSWORD = process.env.DATAFORSEO_PASSWORD || ''
-const PAGESPEED_API_KEY = process.env.GOOGLE_GEMINI_API || process.env.PAGESPEED_API_KEY || ''
-const GTMETRIX_API_KEY = process.env.GTMETRIX_API || ''
+const PAGESPEED_API_KEY = process.env.PAGESPEED_API_KEY || process.env.GOOGLE_GEMINI_API || ''
+const GTMETRIX_API_KEY = process.env.GTMETRIX_API || process.env.GTMETRIX_API_KEY || ''
 const GTMETRIX_EMAIL = process.env.GTMETRIX_EMAIL || 'tomerake@gmail.com'
 const SE_RANKING_API = process.env.SE_RANKING_API || ''
 const SERPSTAT_API = process.env.SERPSTAT_API || ''
