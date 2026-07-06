@@ -322,6 +322,18 @@ async function safeCall(fn) {
         return null;
     }
 }
+function providerUnavailable(provider, error) {
+    const message = error instanceof Error ? error.message : 'Provider request failed';
+    const status = axios.isAxiosError(error) ? error.response?.status : undefined;
+    return {
+        ok: false,
+        provider,
+        state: 'unavailable',
+        error: `${provider} unavailable`,
+        message: status ? `Provider HTTP ${status}` : message,
+        fetchedAt: new Date().toISOString(),
+    };
+}
 // ═══════════════════════════════════════════════════════════════════════════════
 // AHREFS ENDPOINTS
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -337,7 +349,7 @@ app.get('/api/ahrefs/domain-rating', expensiveLimiter, budgetMiddleware('ahrefs'
         res.json(data);
     }
     catch (e) {
-        res.status(502).json({ error: 'Ahrefs unavailable', detail: e.message });
+        res.json(providerUnavailable('ahrefs', e));
     }
 });
 app.get('/api/ahrefs/metrics', expensiveLimiter, budgetMiddleware('ahrefs'), async (req, res) => {
@@ -352,7 +364,7 @@ app.get('/api/ahrefs/metrics', expensiveLimiter, budgetMiddleware('ahrefs'), asy
         res.json(data);
     }
     catch (e) {
-        res.status(502).json({ error: 'Ahrefs unavailable', detail: e.message });
+        res.json(providerUnavailable('ahrefs', e));
     }
 });
 app.get('/api/ahrefs/organic-keywords', expensiveLimiter, budgetMiddleware('ahrefs'), async (req, res) => {
@@ -368,7 +380,7 @@ app.get('/api/ahrefs/organic-keywords', expensiveLimiter, budgetMiddleware('ahre
         res.json(data);
     }
     catch (e) {
-        res.status(502).json({ error: 'Ahrefs unavailable', detail: e.message });
+        res.json(providerUnavailable('ahrefs', e));
     }
 });
 app.get('/api/ahrefs/refdomains', expensiveLimiter, budgetMiddleware('ahrefs'), async (req, res) => {
@@ -384,7 +396,7 @@ app.get('/api/ahrefs/refdomains', expensiveLimiter, budgetMiddleware('ahrefs'), 
         res.json(data);
     }
     catch (e) {
-        res.status(502).json({ error: 'Ahrefs unavailable', detail: e.message });
+        res.json(providerUnavailable('ahrefs', e));
     }
 });
 app.get('/api/ahrefs/backlinks-stats', expensiveLimiter, budgetMiddleware('ahrefs'), async (req, res) => {
@@ -399,7 +411,7 @@ app.get('/api/ahrefs/backlinks-stats', expensiveLimiter, budgetMiddleware('ahref
         res.json(data);
     }
     catch (e) {
-        res.status(502).json({ error: 'Ahrefs unavailable', detail: e.message });
+        res.json(providerUnavailable('ahrefs', e));
     }
 });
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -430,7 +442,7 @@ app.get('/api/semrush/domain-overview', expensiveLimiter, budgetMiddleware('semr
         res.json(data);
     }
     catch (e) {
-        res.status(502).json({ error: 'SEMrush unavailable', detail: e.message });
+        res.json(providerUnavailable('semrush', e));
     }
 });
 app.get('/api/semrush/competitors', expensiveLimiter, budgetMiddleware('semrush'), async (req, res) => {
@@ -445,7 +457,7 @@ app.get('/api/semrush/competitors', expensiveLimiter, budgetMiddleware('semrush'
         res.json(data);
     }
     catch (e) {
-        res.status(502).json({ error: 'SEMrush unavailable', detail: e.message });
+        res.json(providerUnavailable('semrush', e));
     }
 });
 app.get('/api/semrush/keyword-overview', expensiveLimiter, budgetMiddleware('semrush'), async (req, res) => {
@@ -461,7 +473,7 @@ app.get('/api/semrush/keyword-overview', expensiveLimiter, budgetMiddleware('sem
         res.json(data);
     }
     catch (e) {
-        res.status(502).json({ error: 'SEMrush unavailable', detail: e.message });
+        res.json(providerUnavailable('semrush', e));
     }
 });
 app.get('/api/semrush/domain-keywords', expensiveLimiter, budgetMiddleware('semrush'), async (req, res) => {
@@ -476,7 +488,7 @@ app.get('/api/semrush/domain-keywords', expensiveLimiter, budgetMiddleware('semr
         res.json(data);
     }
     catch (e) {
-        res.status(502).json({ error: 'SEMrush unavailable', detail: e.message });
+        res.json(providerUnavailable('semrush', e));
     }
 });
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -492,7 +504,7 @@ app.post('/api/dataforseo/serp', expensiveLimiter, budgetMiddleware('dataforseo'
         res.json(data);
     }
     catch (e) {
-        res.status(502).json({ error: 'DataForSEO unavailable', detail: e.message });
+        res.json(providerUnavailable('dataforseo', e));
     }
 });
 app.post('/api/dataforseo/onpage', expensiveLimiter, budgetMiddleware('dataforseo'), async (req, res) => {
@@ -516,7 +528,7 @@ app.post('/api/dataforseo/onpage', expensiveLimiter, budgetMiddleware('dataforse
         res.json(data);
     }
     catch (e) {
-        res.status(502).json({ error: 'DataForSEO unavailable', detail: e.message });
+        res.json(providerUnavailable('dataforseo', e));
     }
 });
 app.post('/api/dataforseo/backlinks', expensiveLimiter, budgetMiddleware('dataforseo'), async (req, res) => {
@@ -529,7 +541,7 @@ app.post('/api/dataforseo/backlinks', expensiveLimiter, budgetMiddleware('datafo
         res.json(data);
     }
     catch (e) {
-        res.status(502).json({ error: 'DataForSEO unavailable', detail: e.message });
+        res.json(providerUnavailable('dataforseo', e));
     }
 });
 app.post('/api/dataforseo/domain-summary', expensiveLimiter, budgetMiddleware('dataforseo'), async (req, res) => {
@@ -542,7 +554,7 @@ app.post('/api/dataforseo/domain-summary', expensiveLimiter, budgetMiddleware('d
         res.json(data);
     }
     catch (e) {
-        res.status(502).json({ error: 'DataForSEO unavailable', detail: e.message });
+        res.json(providerUnavailable('dataforseo', e));
     }
 });
 app.post('/api/dataforseo/ranked-keywords', expensiveLimiter, budgetMiddleware('dataforseo'), async (req, res) => {
@@ -555,7 +567,7 @@ app.post('/api/dataforseo/ranked-keywords', expensiveLimiter, budgetMiddleware('
         res.json(data);
     }
     catch (e) {
-        res.status(502).json({ error: 'DataForSEO unavailable', detail: e.message });
+        res.json(providerUnavailable('dataforseo', e));
     }
 });
 app.post('/api/dataforseo/competitors', expensiveLimiter, budgetMiddleware('dataforseo'), async (req, res) => {
@@ -568,7 +580,7 @@ app.post('/api/dataforseo/competitors', expensiveLimiter, budgetMiddleware('data
         res.json(data);
     }
     catch (e) {
-        res.status(502).json({ error: 'DataForSEO unavailable', detail: e.message });
+        res.json(providerUnavailable('dataforseo', e));
     }
 });
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -586,7 +598,7 @@ app.get('/api/pagespeed', async (req, res) => {
         res.json(data);
     }
     catch (e) {
-        res.status(502).json({ error: 'PageSpeed unavailable', detail: e.message });
+        res.json(providerUnavailable('pagespeed', e));
     }
 });
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -615,7 +627,7 @@ app.post('/api/gtmetrix/test', expensiveLimiter, budgetMiddleware('gtmetrix'), a
         res.json(data);
     }
     catch (e) {
-        res.status(502).json({ error: 'GTmetrix unavailable', detail: e.message });
+        res.json(providerUnavailable('gtmetrix', e));
     }
 });
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -636,7 +648,7 @@ app.post('/api/exa/search', expensiveLimiter, budgetMiddleware('exa'), async (re
         res.json(data);
     }
     catch (e) {
-        res.status(502).json({ error: 'Exa unavailable', detail: e.message });
+        res.json(providerUnavailable('exa', e));
     }
 });
 app.post('/api/exa/find-similar', expensiveLimiter, budgetMiddleware('exa'), async (req, res) => {
@@ -653,7 +665,7 @@ app.post('/api/exa/find-similar', expensiveLimiter, budgetMiddleware('exa'), asy
         res.json(data);
     }
     catch (e) {
-        res.status(502).json({ error: 'Exa unavailable', detail: e.message });
+        res.json(providerUnavailable('exa', e));
     }
 });
 app.post('/api/exa/contents', expensiveLimiter, budgetMiddleware('exa'), async (req, res) => {
@@ -670,7 +682,7 @@ app.post('/api/exa/contents', expensiveLimiter, budgetMiddleware('exa'), async (
         res.json(data);
     }
     catch (e) {
-        res.status(502).json({ error: 'Exa unavailable', detail: e.message });
+        res.json(providerUnavailable('exa', e));
     }
 });
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -698,7 +710,7 @@ app.post('/api/browserless/scrape', expensiveLimiter, budgetMiddleware('browserl
         res.json(data);
     }
     catch (e) {
-        res.status(502).json({ error: 'Browserless unavailable', detail: e.message });
+        res.json(providerUnavailable('browserless', e));
     }
 });
 app.post('/api/browserless/lighthouse', expensiveLimiter, budgetMiddleware('browserless'), async (req, res) => {
@@ -721,7 +733,7 @@ app.post('/api/browserless/lighthouse', expensiveLimiter, budgetMiddleware('brow
         res.json(data);
     }
     catch (e) {
-        res.status(502).json({ error: 'Browserless Lighthouse unavailable', detail: e.message });
+        res.json(providerUnavailable('browserless', e));
     }
 });
 app.post('/api/browserless/screenshot', expensiveLimiter, budgetMiddleware('browserless'), async (req, res) => {
@@ -740,7 +752,7 @@ app.post('/api/browserless/screenshot', expensiveLimiter, budgetMiddleware('brow
         res.json({ screenshot: data });
     }
     catch (e) {
-        res.status(502).json({ error: 'Browserless screenshot unavailable', detail: e.message });
+        res.json(providerUnavailable('browserless', e));
     }
 });
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -760,7 +772,7 @@ app.post('/api/thorbit/analyze', expensiveLimiter, budgetMiddleware('thorbit'), 
         res.json(data);
     }
     catch (e) {
-        res.status(502).json({ error: 'Thorbit unavailable', detail: e.message });
+        res.json(providerUnavailable('thorbit', e));
     }
 });
 app.post('/api/thorbit/suggestions', expensiveLimiter, budgetMiddleware('thorbit'), async (req, res) => {
@@ -777,7 +789,7 @@ app.post('/api/thorbit/suggestions', expensiveLimiter, budgetMiddleware('thorbit
         res.json(data);
     }
     catch (e) {
-        res.status(502).json({ error: 'Thorbit unavailable', detail: e.message });
+        res.json(providerUnavailable('thorbit', e));
     }
 });
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -795,7 +807,7 @@ app.get('/api/seranking/domain', expensiveLimiter, budgetMiddleware('seranking')
         res.json(data);
     }
     catch (e) {
-        res.status(502).json({ error: 'SE Ranking unavailable', detail: e.message });
+        res.json(providerUnavailable('seranking', e));
     }
 });
 app.get('/api/seranking/keywords', expensiveLimiter, budgetMiddleware('seranking'), async (req, res) => {
@@ -810,7 +822,7 @@ app.get('/api/seranking/keywords', expensiveLimiter, budgetMiddleware('seranking
         res.json(data);
     }
     catch (e) {
-        res.status(502).json({ error: 'SE Ranking unavailable', detail: e.message });
+        res.json(providerUnavailable('seranking', e));
     }
 });
 app.get('/api/seranking/competitors', expensiveLimiter, budgetMiddleware('seranking'), async (req, res) => {
@@ -825,7 +837,7 @@ app.get('/api/seranking/competitors', expensiveLimiter, budgetMiddleware('serank
         res.json(data);
     }
     catch (e) {
-        res.status(502).json({ error: 'SE Ranking unavailable', detail: e.message });
+        res.json(providerUnavailable('seranking', e));
     }
 });
 app.get('/api/seranking/backlinks', expensiveLimiter, budgetMiddleware('seranking'), async (req, res) => {
@@ -840,7 +852,7 @@ app.get('/api/seranking/backlinks', expensiveLimiter, budgetMiddleware('serankin
         res.json(data);
     }
     catch (e) {
-        res.status(502).json({ error: 'SE Ranking unavailable', detail: e.message });
+        res.json(providerUnavailable('seranking', e));
     }
 });
 // ═══════════════════════════════════════════════════════════════════════════════

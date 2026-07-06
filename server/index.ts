@@ -361,6 +361,19 @@ async function safeCall<T>(fn: () => Promise<T>): Promise<T | null> {
   try { return await fn() } catch { return null }
 }
 
+function providerUnavailable(provider: string, error: unknown) {
+  const message = error instanceof Error ? error.message : 'Provider request failed'
+  const status = axios.isAxiosError(error) ? error.response?.status : undefined
+  return {
+    ok: false,
+    provider,
+    state: 'unavailable',
+    error: `${provider} unavailable`,
+    message: status ? `Provider HTTP ${status}` : message,
+    fetchedAt: new Date().toISOString(),
+  }
+}
+
 // ═══════════════════════════════════════════════════════════════════════════════
 // AHREFS ENDPOINTS
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -375,7 +388,7 @@ app.get('/api/ahrefs/domain-rating', expensiveLimiter, budgetMiddleware('ahrefs'
       return r.data
     })
     res.json(data)
-  } catch (e: any) { res.status(502).json({ error: 'Ahrefs unavailable', detail: e.message }) }
+  } catch (e: any) { res.json(providerUnavailable('ahrefs', e)) }
 })
 
 app.get('/api/ahrefs/metrics', expensiveLimiter, budgetMiddleware('ahrefs'), async (req, res) => {
@@ -388,7 +401,7 @@ app.get('/api/ahrefs/metrics', expensiveLimiter, budgetMiddleware('ahrefs'), asy
       return r.data
     })
     res.json(data)
-  } catch (e: any) { res.status(502).json({ error: 'Ahrefs unavailable', detail: e.message }) }
+  } catch (e: any) { res.json(providerUnavailable('ahrefs', e)) }
 })
 
 app.get('/api/ahrefs/organic-keywords', expensiveLimiter, budgetMiddleware('ahrefs'), async (req, res) => {
@@ -402,7 +415,7 @@ app.get('/api/ahrefs/organic-keywords', expensiveLimiter, budgetMiddleware('ahre
       return r.data
     })
     res.json(data)
-  } catch (e: any) { res.status(502).json({ error: 'Ahrefs unavailable', detail: e.message }) }
+  } catch (e: any) { res.json(providerUnavailable('ahrefs', e)) }
 })
 
 app.get('/api/ahrefs/refdomains', expensiveLimiter, budgetMiddleware('ahrefs'), async (req, res) => {
@@ -416,7 +429,7 @@ app.get('/api/ahrefs/refdomains', expensiveLimiter, budgetMiddleware('ahrefs'), 
       return r.data
     })
     res.json(data)
-  } catch (e: any) { res.status(502).json({ error: 'Ahrefs unavailable', detail: e.message }) }
+  } catch (e: any) { res.json(providerUnavailable('ahrefs', e)) }
 })
 
 app.get('/api/ahrefs/backlinks-stats', expensiveLimiter, budgetMiddleware('ahrefs'), async (req, res) => {
@@ -429,7 +442,7 @@ app.get('/api/ahrefs/backlinks-stats', expensiveLimiter, budgetMiddleware('ahref
       return r.data
     })
     res.json(data)
-  } catch (e: any) { res.status(502).json({ error: 'Ahrefs unavailable', detail: e.message }) }
+  } catch (e: any) { res.json(providerUnavailable('ahrefs', e)) }
 })
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -459,7 +472,7 @@ app.get('/api/semrush/domain-overview', expensiveLimiter, budgetMiddleware('semr
       return rows[0] || null
     })
     res.json(data)
-  } catch (e: any) { res.status(502).json({ error: 'SEMrush unavailable', detail: e.message }) }
+  } catch (e: any) { res.json(providerUnavailable('semrush', e)) }
 })
 
 app.get('/api/semrush/competitors', expensiveLimiter, budgetMiddleware('semrush'), async (req, res) => {
@@ -472,7 +485,7 @@ app.get('/api/semrush/competitors', expensiveLimiter, budgetMiddleware('semrush'
       return parseSemrushCSV(r.data)
     })
     res.json(data)
-  } catch (e: any) { res.status(502).json({ error: 'SEMrush unavailable', detail: e.message }) }
+  } catch (e: any) { res.json(providerUnavailable('semrush', e)) }
 })
 
 app.get('/api/semrush/keyword-overview', expensiveLimiter, budgetMiddleware('semrush'), async (req, res) => {
@@ -486,7 +499,7 @@ app.get('/api/semrush/keyword-overview', expensiveLimiter, budgetMiddleware('sem
       return rows[0] || null
     })
     res.json(data)
-  } catch (e: any) { res.status(502).json({ error: 'SEMrush unavailable', detail: e.message }) }
+  } catch (e: any) { res.json(providerUnavailable('semrush', e)) }
 })
 
 app.get('/api/semrush/domain-keywords', expensiveLimiter, budgetMiddleware('semrush'), async (req, res) => {
@@ -499,7 +512,7 @@ app.get('/api/semrush/domain-keywords', expensiveLimiter, budgetMiddleware('semr
       return parseSemrushCSV(r.data)
     })
     res.json(data)
-  } catch (e: any) { res.status(502).json({ error: 'SEMrush unavailable', detail: e.message }) }
+  } catch (e: any) { res.json(providerUnavailable('semrush', e)) }
 })
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -516,7 +529,7 @@ app.post('/api/dataforseo/serp', expensiveLimiter, budgetMiddleware('dataforseo'
       return r.data
     })
     res.json(data)
-  } catch (e: any) { res.status(502).json({ error: 'DataForSEO unavailable', detail: e.message }) }
+  } catch (e: any) { res.json(providerUnavailable('dataforseo', e)) }
 })
 
 app.post('/api/dataforseo/onpage', expensiveLimiter, budgetMiddleware('dataforseo'), async (req, res) => {
@@ -541,7 +554,7 @@ app.post('/api/dataforseo/onpage', expensiveLimiter, budgetMiddleware('dataforse
       throw new Error('On-page audit timed out')
     })
     res.json(data)
-  } catch (e: any) { res.status(502).json({ error: 'DataForSEO unavailable', detail: e.message }) }
+  } catch (e: any) { res.json(providerUnavailable('dataforseo', e)) }
 })
 
 app.post('/api/dataforseo/backlinks', expensiveLimiter, budgetMiddleware('dataforseo'), async (req, res) => {
@@ -554,7 +567,7 @@ app.post('/api/dataforseo/backlinks', expensiveLimiter, budgetMiddleware('datafo
       return r.data
     })
     res.json(data)
-  } catch (e: any) { res.status(502).json({ error: 'DataForSEO unavailable', detail: e.message }) }
+  } catch (e: any) { res.json(providerUnavailable('dataforseo', e)) }
 })
 
 app.post('/api/dataforseo/domain-summary', expensiveLimiter, budgetMiddleware('dataforseo'), async (req, res) => {
@@ -567,7 +580,7 @@ app.post('/api/dataforseo/domain-summary', expensiveLimiter, budgetMiddleware('d
       return r.data
     })
     res.json(data)
-  } catch (e: any) { res.status(502).json({ error: 'DataForSEO unavailable', detail: e.message }) }
+  } catch (e: any) { res.json(providerUnavailable('dataforseo', e)) }
 })
 
 app.post('/api/dataforseo/ranked-keywords', expensiveLimiter, budgetMiddleware('dataforseo'), async (req, res) => {
@@ -580,7 +593,7 @@ app.post('/api/dataforseo/ranked-keywords', expensiveLimiter, budgetMiddleware('
       return r.data
     })
     res.json(data)
-  } catch (e: any) { res.status(502).json({ error: 'DataForSEO unavailable', detail: e.message }) }
+  } catch (e: any) { res.json(providerUnavailable('dataforseo', e)) }
 })
 
 app.post('/api/dataforseo/competitors', expensiveLimiter, budgetMiddleware('dataforseo'), async (req, res) => {
@@ -593,7 +606,7 @@ app.post('/api/dataforseo/competitors', expensiveLimiter, budgetMiddleware('data
       return r.data
     })
     res.json(data)
-  } catch (e: any) { res.status(502).json({ error: 'DataForSEO unavailable', detail: e.message }) }
+  } catch (e: any) { res.json(providerUnavailable('dataforseo', e)) }
 })
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -610,7 +623,7 @@ app.get('/api/pagespeed', async (req, res) => {
       return r.data
     })
     res.json(data)
-  } catch (e: any) { res.status(502).json({ error: 'PageSpeed unavailable', detail: e.message }) }
+  } catch (e: any) { res.json(providerUnavailable('pagespeed', e)) }
 })
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -638,7 +651,7 @@ app.post('/api/gtmetrix/test', expensiveLimiter, budgetMiddleware('gtmetrix'), a
       throw new Error('GTmetrix test timed out')
     })
     res.json(data)
-  } catch (e: any) { res.status(502).json({ error: 'GTmetrix unavailable', detail: e.message }) }
+  } catch (e: any) { res.json(providerUnavailable('gtmetrix', e)) }
 })
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -658,7 +671,7 @@ app.post('/api/exa/search', expensiveLimiter, budgetMiddleware('exa'), async (re
       return r.data
     })
     res.json(data)
-  } catch (e: any) { res.status(502).json({ error: 'Exa unavailable', detail: e.message }) }
+  } catch (e: any) { res.json(providerUnavailable('exa', e)) }
 })
 
 app.post('/api/exa/find-similar', expensiveLimiter, budgetMiddleware('exa'), async (req, res) => {
@@ -673,7 +686,7 @@ app.post('/api/exa/find-similar', expensiveLimiter, budgetMiddleware('exa'), asy
       return r.data
     })
     res.json(data)
-  } catch (e: any) { res.status(502).json({ error: 'Exa unavailable', detail: e.message }) }
+  } catch (e: any) { res.json(providerUnavailable('exa', e)) }
 })
 
 app.post('/api/exa/contents', expensiveLimiter, budgetMiddleware('exa'), async (req, res) => {
@@ -688,7 +701,7 @@ app.post('/api/exa/contents', expensiveLimiter, budgetMiddleware('exa'), async (
       return r.data
     })
     res.json(data)
-  } catch (e: any) { res.status(502).json({ error: 'Exa unavailable', detail: e.message }) }
+  } catch (e: any) { res.json(providerUnavailable('exa', e)) }
 })
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -714,7 +727,7 @@ app.post('/api/browserless/scrape', expensiveLimiter, budgetMiddleware('browserl
       return r.data
     })
     res.json(data)
-  } catch (e: any) { res.status(502).json({ error: 'Browserless unavailable', detail: e.message }) }
+  } catch (e: any) { res.json(providerUnavailable('browserless', e)) }
 })
 
 app.post('/api/browserless/lighthouse', expensiveLimiter, budgetMiddleware('browserless'), async (req, res) => {
@@ -734,7 +747,7 @@ app.post('/api/browserless/lighthouse', expensiveLimiter, budgetMiddleware('brow
       return r.data
     })
     res.json(data)
-  } catch (e: any) { res.status(502).json({ error: 'Browserless Lighthouse unavailable', detail: e.message }) }
+  } catch (e: any) { res.json(providerUnavailable('browserless', e)) }
 })
 
 app.post('/api/browserless/screenshot', expensiveLimiter, budgetMiddleware('browserless'), async (req, res) => {
@@ -750,7 +763,7 @@ app.post('/api/browserless/screenshot', expensiveLimiter, budgetMiddleware('brow
       return `data:image/png;base64,${Buffer.from(r.data).toString('base64')}`
     })
     res.json({ screenshot: data })
-  } catch (e: any) { res.status(502).json({ error: 'Browserless screenshot unavailable', detail: e.message }) }
+  } catch (e: any) { res.json(providerUnavailable('browserless', e)) }
 })
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -768,7 +781,7 @@ app.post('/api/thorbit/analyze', expensiveLimiter, budgetMiddleware('thorbit'), 
       return r.data
     })
     res.json(data)
-  } catch (e: any) { res.status(502).json({ error: 'Thorbit unavailable', detail: e.message }) }
+  } catch (e: any) { res.json(providerUnavailable('thorbit', e)) }
 })
 
 app.post('/api/thorbit/suggestions', expensiveLimiter, budgetMiddleware('thorbit'), async (req, res) => {
@@ -782,7 +795,7 @@ app.post('/api/thorbit/suggestions', expensiveLimiter, budgetMiddleware('thorbit
       return r.data
     })
     res.json(data)
-  } catch (e: any) { res.status(502).json({ error: 'Thorbit unavailable', detail: e.message }) }
+  } catch (e: any) { res.json(providerUnavailable('thorbit', e)) }
 })
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -799,7 +812,7 @@ app.get('/api/seranking/domain', expensiveLimiter, budgetMiddleware('seranking')
       return r.data
     })
     res.json(data)
-  } catch (e: any) { res.status(502).json({ error: 'SE Ranking unavailable', detail: e.message }) }
+  } catch (e: any) { res.json(providerUnavailable('seranking', e)) }
 })
 
 app.get('/api/seranking/keywords', expensiveLimiter, budgetMiddleware('seranking'), async (req, res) => {
@@ -812,7 +825,7 @@ app.get('/api/seranking/keywords', expensiveLimiter, budgetMiddleware('seranking
       return r.data
     })
     res.json(data)
-  } catch (e: any) { res.status(502).json({ error: 'SE Ranking unavailable', detail: e.message }) }
+  } catch (e: any) { res.json(providerUnavailable('seranking', e)) }
 })
 
 app.get('/api/seranking/competitors', expensiveLimiter, budgetMiddleware('seranking'), async (req, res) => {
@@ -825,7 +838,7 @@ app.get('/api/seranking/competitors', expensiveLimiter, budgetMiddleware('serank
       return r.data
     })
     res.json(data)
-  } catch (e: any) { res.status(502).json({ error: 'SE Ranking unavailable', detail: e.message }) }
+  } catch (e: any) { res.json(providerUnavailable('seranking', e)) }
 })
 
 app.get('/api/seranking/backlinks', expensiveLimiter, budgetMiddleware('seranking'), async (req, res) => {
@@ -838,7 +851,7 @@ app.get('/api/seranking/backlinks', expensiveLimiter, budgetMiddleware('serankin
       return r.data
     })
     res.json(data)
-  } catch (e: any) { res.status(502).json({ error: 'SE Ranking unavailable', detail: e.message }) }
+  } catch (e: any) { res.json(providerUnavailable('seranking', e)) }
 })
 
 // ═══════════════════════════════════════════════════════════════════════════════
