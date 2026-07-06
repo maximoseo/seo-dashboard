@@ -15,6 +15,7 @@ import { renderReportMarkdown } from './reports/renderReport.js'
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
 const app = express()
+app.set('trust proxy', 1)
 const PORT = process.env.PORT || 3001
 
 // Caches: 5min for realtime, 24h for historical
