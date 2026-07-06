@@ -30,7 +30,22 @@ export function useSEO() {
 }
 
 export function SEOProvider({ children }: { children: ReactNode }) {
-  const [domain, setDomain] = useState('maximo-seo.ai')
+  // Persist domain to localStorage + URL param
+  const getInitialDomain = () => {
+    // Check URL first
+    const url = new URL(window.location.href)
+    const urlDomain = url.searchParams.get('domain')
+    if (urlDomain) return urlDomain
+    
+    // Then localStorage
+    const stored = localStorage.getItem('maximo:activeDomain')
+    if (stored) return stored
+    
+    // Default
+    return 'maximo-seo.ai'
+  }
+  
+  const [domain, setDomainState] = useState(getInitialDomain)
   const [overview, setOverview] = useState<OverviewData | null>(null)
   const [overviewLoading, setOverviewLoading] = useState(false)
   const [overviewError, setOverviewError] = useState<string | null>(null)
@@ -65,6 +80,21 @@ export function SEOProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     loadOverview()
   }, [loadOverview])
+
+  // setDomain wrapper: persists to localStorage + updates URL
+  const setDomain = useCallback((d: string) => {
+    setDomainState(d)
+    localStorage.setItem('maximo:activeDomain', d)
+    // Update URL without full reload
+    const url = new URL(window.location.href)
+    url.searchParams.set('domain', d)
+    window.history.replaceState({}, '', url)
+  }, [])
+
+  // Sync localStorage when domain changes via other means
+  useEffect(() => {
+    localStorage.setItem('maximo:activeDomain', domain)
+  }, [domain])
 
   return (
     <SEOContext.Provider value={{

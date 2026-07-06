@@ -4,6 +4,9 @@ import NodeCache from 'node-cache'
 import axios from 'axios'
 import path from 'path'
 import { fileURLToPath } from 'url'
+import rateLimit from 'express-rate-limit'
+import { z } from 'zod'
+import { createClient } from '@supabase/supabase-js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
@@ -14,8 +17,165 @@ const PORT = process.env.PORT || 3001
 const realtimeCache = new NodeCache({ stdTTL: 300 })
 const historicalCache = new NodeCache({ stdTTL: 86400 })
 
-app.use(cors({ origin: ['http://localhost:5173', 'http://localhost:4173', 'https://seo-dashboard.maximo-seo.ai', 'https://seo-dashboard-gzb6.onrender.com', process.env.FRONTEND_URL || ''].filter(Boolean) }))
+// ═══════════════════════════════════════════════════════════════════════════════
+// SECURITY: CORS pinned to frontend origin only
+// ═══════════════════════════════════════════════════════════════════════════════
+const ALLOWED_ORIGINS = [
+  'https://seo-dashboard.maximo-seo.ai',
+  'https://seo-dashboard-gzb6.onrender.com',
+  'http://localhost:5173',
+  'http://localhost:4173',
+  process.env.FRONTEND_URL || '',
+].filter(Boolean)
+
+app.use(cors({ origin: ALLOWED_ORIGINS }))
 app.use(express.json())
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// SECURITY: Rate limiting
+// ═══════════════════════════════════════════════════════════════════════════════
+const generalLimiter = rateLimit({
+  windowMs: 60_000, // 1 minute
+  max: 60, // 60 req/min per IP
+  message: { error: 'Rate limit exceeded. Please slow down.' },
+})
+
+const expensiveLimiter = rateLimit({
+  windowMs: 60_000,
+  max: 10, // 10 req/min for expensive providers
+  message: { error: 'Rate limit exceeded for this provider. Please wait.' },
+})
+
+app.use('/api', generalLimiter)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// SECURITY: Auth middleware — Supabase JWT verification
+// ═══════════════════════════════════════════════════════════════════════════════
+const SUPABASE_URL = process.env.SUPABASE_URL || ''
+const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY || ''
+const AUTH_DISABLED = process.env.AUTH_DISABLED === 'true' // for local dev only
+
+const supabase = SUPABASE_URL ? createClient(SUPABASE_URL, SUPABASE_ANON_KEY) : null
+
+// Auth middleware — skips /api/health and /api/cache/clear for health checks
+app.use('/api', async (req, res, next) => {
+  // Skip auth for health check endpoint
+  if (req.path === '/health' || req.path === '/cache/clear') {
+    return next()
+  }
+
+  // Allow bypass in dev mode
+  if (AUTH_DISABLED) {
+    return next()
+  }
+
+  const token = req.get('authorization')?.replace(/^Bearer\s+/i, '')
+  if (!token) {
+    return res.status(401).json({ error: 'Authentication required. Provide a Bearer token.' })
+  }
+
+  if (!supabase) {
+    // Fallback: if Supabase not configured, use a shared API key check
+    // This is a temporary measure — Supabase Auth should be configured
+    const API_KEY = process.env.DASHBOARD_API_KEY
+    if (API_KEY && token === API_KEY) {
+      return next()
+    }
+    return res.status(503).json({ error: 'Auth not configured. Set SUPABASE_URL and SUPABASE_ANON_KEY.' })
+  }
+
+  try {
+    const { data, error } = await supabase.auth.getUser(token)
+    if (error || !data?.user) {
+      return res.status(401).json({ error: 'Invalid or expired token.' })
+    }
+    // Attach user to request for downstream use
+    ;(req as any).user = data.user
+    next()
+  } catch {
+    return res.status(401).json({ error: 'Authentication failed.' })
+  }
+})
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// SECURITY: Zod validation schemas
+// ═══════════════════════════════════════════════════════════════════════════════
+const domainSchema = z.string().regex(/^[a-z0-9.-]+\.[a-z]{2,}$/i, 'Invalid domain format')
+const urlSchema = z.string().url('Invalid URL format')
+const providerSchema = z.enum([
+  'ahrefs', 'semrush', 'dataforseo', 'pagespeed', 'gtmetrix',
+  'exa', 'browserless', 'thorbit', 'seranking'
+])
+
+// Validation middleware factory
+function validateQuery(schema: z.ZodSchema) {
+  return (req: express.Request, res: express.Response, next: express.NextFunction) => {
+    const parsed = schema.safeParse(req.query)
+    if (!parsed.success) {
+      return res.status(400).json({ error: 'Invalid request', details: parsed.error.issues })
+    }
+    ;(req as any).validatedQuery = parsed.data
+    next()
+  }
+}
+
+function validateBody(schema: z.ZodSchema) {
+  return (req: express.Request, res: express.Response, next: express.NextFunction) => {
+    const parsed = schema.safeParse(req.body)
+    if (!parsed.success) {
+      return res.status(400).json({ error: 'Invalid request body', details: parsed.error.issues })
+    }
+    ;(req as any).validatedBody = parsed.data
+    next()
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// SECURITY: Per-provider daily budget caps
+// ═══════════════════════════════════════════════════════════════════════════════
+const budgetTracker: Record<string, { count: number; date: string }> = {}
+const DAILY_BUDGETS: Record<string, number> = {
+  ahrefs: 100,
+  semrush: 100,
+  dataforseo: 200,
+  pagespeed: 500,
+  gtmetrix: 50,
+  exa: 200,
+  browserless: 100,
+  thorbit: 50,
+  seranking: 100,
+}
+
+function checkBudget(provider: string): boolean {
+  const today = new Date().toISOString().split('T')[0]
+  const tracker = budgetTracker[provider]
+  
+  if (!tracker || tracker.date !== today) {
+    budgetTracker[provider] = { count: 1, date: today }
+    return true
+  }
+  
+  const limit = DAILY_BUDGETS[provider] || 100
+  if (tracker.count >= limit) {
+    return false
+  }
+  
+  tracker.count++
+  return true
+}
+
+function budgetMiddleware(provider: string) {
+  return (_req: express.Request, res: express.Response, next: express.NextFunction) => {
+    if (!checkBudget(provider)) {
+      return res.status(429).json({ 
+        error: `Daily budget cap reached for ${provider}. Try again tomorrow or contact admin.`,
+        provider,
+        limit: DAILY_BUDGETS[provider] || 100,
+      })
+    }
+    next()
+  }
+}
 
 // ─── Env vars ────────────────────────────────────────────────────────────────
 const AHREFS_API_KEY = process.env.AHREFS_API_KEY || process.env.AHREFS_API || ''
@@ -54,7 +214,7 @@ async function safeCall<T>(fn: () => Promise<T>): Promise<T | null> {
 // AHREFS ENDPOINTS
 // ═══════════════════════════════════════════════════════════════════════════════
 
-app.get('/api/ahrefs/domain-rating', async (req, res) => {
+app.get('/api/ahrefs/domain-rating', expensiveLimiter, budgetMiddleware('ahrefs'), async (req, res) => {
   const { target, date } = req.query as Record<string, string>
   try {
     const data = await withCache(realtimeCache, `ahrefs_dr_${target}_${date}`, async () => {
@@ -67,7 +227,7 @@ app.get('/api/ahrefs/domain-rating', async (req, res) => {
   } catch (e: any) { res.status(502).json({ error: 'Ahrefs unavailable', detail: e.message }) }
 })
 
-app.get('/api/ahrefs/metrics', async (req, res) => {
+app.get('/api/ahrefs/metrics', expensiveLimiter, budgetMiddleware('ahrefs'), async (req, res) => {
   const { target, date, mode } = req.query as Record<string, string>
   try {
     const data = await withCache(realtimeCache, `ahrefs_metrics_${target}_${date}`, async () => {
@@ -80,7 +240,7 @@ app.get('/api/ahrefs/metrics', async (req, res) => {
   } catch (e: any) { res.status(502).json({ error: 'Ahrefs unavailable', detail: e.message }) }
 })
 
-app.get('/api/ahrefs/organic-keywords', async (req, res) => {
+app.get('/api/ahrefs/organic-keywords', expensiveLimiter, budgetMiddleware('ahrefs'), async (req, res) => {
   const { target, date, mode, limit, select, order_by } = req.query as Record<string, string>
   try {
     const data = await withCache(realtimeCache, `ahrefs_kw_${target}_${date}_${limit}`, async () => {
@@ -94,7 +254,7 @@ app.get('/api/ahrefs/organic-keywords', async (req, res) => {
   } catch (e: any) { res.status(502).json({ error: 'Ahrefs unavailable', detail: e.message }) }
 })
 
-app.get('/api/ahrefs/refdomains', async (req, res) => {
+app.get('/api/ahrefs/refdomains', expensiveLimiter, budgetMiddleware('ahrefs'), async (req, res) => {
   const { target, mode, limit, select, order_by } = req.query as Record<string, string>
   try {
     const data = await withCache(realtimeCache, `ahrefs_rd_${target}_${limit}`, async () => {
@@ -108,7 +268,7 @@ app.get('/api/ahrefs/refdomains', async (req, res) => {
   } catch (e: any) { res.status(502).json({ error: 'Ahrefs unavailable', detail: e.message }) }
 })
 
-app.get('/api/ahrefs/backlinks-stats', async (req, res) => {
+app.get('/api/ahrefs/backlinks-stats', expensiveLimiter, budgetMiddleware('ahrefs'), async (req, res) => {
   const { target, mode } = req.query as Record<string, string>
   try {
     const data = await withCache(realtimeCache, `ahrefs_bl_${target}`, async () => {
@@ -137,7 +297,7 @@ function parseSemrushCSV(csv: string): Record<string, string>[] {
   })
 }
 
-app.get('/api/semrush/domain-overview', async (req, res) => {
+app.get('/api/semrush/domain-overview', expensiveLimiter, budgetMiddleware('semrush'), async (req, res) => {
   const { domain } = req.query as Record<string, string>
   try {
     const data = await withCache(realtimeCache, `semrush_overview_${domain}`, async () => {
@@ -151,7 +311,7 @@ app.get('/api/semrush/domain-overview', async (req, res) => {
   } catch (e: any) { res.status(502).json({ error: 'SEMrush unavailable', detail: e.message }) }
 })
 
-app.get('/api/semrush/competitors', async (req, res) => {
+app.get('/api/semrush/competitors', expensiveLimiter, budgetMiddleware('semrush'), async (req, res) => {
   const { domain } = req.query as Record<string, string>
   try {
     const data = await withCache(historicalCache, `semrush_competitors_${domain}`, async () => {
@@ -164,7 +324,7 @@ app.get('/api/semrush/competitors', async (req, res) => {
   } catch (e: any) { res.status(502).json({ error: 'SEMrush unavailable', detail: e.message }) }
 })
 
-app.get('/api/semrush/keyword-overview', async (req, res) => {
+app.get('/api/semrush/keyword-overview', expensiveLimiter, budgetMiddleware('semrush'), async (req, res) => {
   const { keyword, database } = req.query as Record<string, string>
   try {
     const data = await withCache(historicalCache, `semrush_kw_${keyword}_${database || 'us'}`, async () => {
@@ -178,7 +338,7 @@ app.get('/api/semrush/keyword-overview', async (req, res) => {
   } catch (e: any) { res.status(502).json({ error: 'SEMrush unavailable', detail: e.message }) }
 })
 
-app.get('/api/semrush/domain-keywords', async (req, res) => {
+app.get('/api/semrush/domain-keywords', expensiveLimiter, budgetMiddleware('semrush'), async (req, res) => {
   const { domain, limit } = req.query as Record<string, string>
   try {
     const data = await withCache(realtimeCache, `semrush_dkw_${domain}_${limit}`, async () => {
@@ -195,7 +355,7 @@ app.get('/api/semrush/domain-keywords', async (req, res) => {
 // DATAFORSEO ENDPOINTS
 // ═══════════════════════════════════════════════════════════════════════════════
 
-app.post('/api/dataforseo/serp', async (req, res) => {
+app.post('/api/dataforseo/serp', expensiveLimiter, budgetMiddleware('dataforseo'), async (req, res) => {
   const { keyword, location_code, language_code } = req.body
   try {
     const data = await withCache(realtimeCache, `dfs_serp_${keyword}_${location_code}`, async () => {
@@ -208,7 +368,7 @@ app.post('/api/dataforseo/serp', async (req, res) => {
   } catch (e: any) { res.status(502).json({ error: 'DataForSEO unavailable', detail: e.message }) }
 })
 
-app.post('/api/dataforseo/onpage', async (req, res) => {
+app.post('/api/dataforseo/onpage', expensiveLimiter, budgetMiddleware('dataforseo'), async (req, res) => {
   const { target, max_crawl_pages } = req.body
   try {
     const data = await withCache(historicalCache, `dfs_onpage_${target}`, async () => {
@@ -233,7 +393,7 @@ app.post('/api/dataforseo/onpage', async (req, res) => {
   } catch (e: any) { res.status(502).json({ error: 'DataForSEO unavailable', detail: e.message }) }
 })
 
-app.post('/api/dataforseo/backlinks', async (req, res) => {
+app.post('/api/dataforseo/backlinks', expensiveLimiter, budgetMiddleware('dataforseo'), async (req, res) => {
   const { target, limit } = req.body
   try {
     const data = await withCache(realtimeCache, `dfs_bl_${target}_${limit}`, async () => {
@@ -246,7 +406,7 @@ app.post('/api/dataforseo/backlinks', async (req, res) => {
   } catch (e: any) { res.status(502).json({ error: 'DataForSEO unavailable', detail: e.message }) }
 })
 
-app.post('/api/dataforseo/domain-summary', async (req, res) => {
+app.post('/api/dataforseo/domain-summary', expensiveLimiter, budgetMiddleware('dataforseo'), async (req, res) => {
   const { target } = req.body
   try {
     const data = await withCache(realtimeCache, `dfs_domain_${target}`, async () => {
@@ -259,7 +419,7 @@ app.post('/api/dataforseo/domain-summary', async (req, res) => {
   } catch (e: any) { res.status(502).json({ error: 'DataForSEO unavailable', detail: e.message }) }
 })
 
-app.post('/api/dataforseo/ranked-keywords', async (req, res) => {
+app.post('/api/dataforseo/ranked-keywords', expensiveLimiter, budgetMiddleware('dataforseo'), async (req, res) => {
   const { target, limit } = req.body
   try {
     const data = await withCache(realtimeCache, `dfs_rkw_${target}_${limit}`, async () => {
@@ -272,7 +432,7 @@ app.post('/api/dataforseo/ranked-keywords', async (req, res) => {
   } catch (e: any) { res.status(502).json({ error: 'DataForSEO unavailable', detail: e.message }) }
 })
 
-app.post('/api/dataforseo/competitors', async (req, res) => {
+app.post('/api/dataforseo/competitors', expensiveLimiter, budgetMiddleware('dataforseo'), async (req, res) => {
   const { target, limit } = req.body
   try {
     const data = await withCache(historicalCache, `dfs_comp_${target}_${limit}`, async () => {
@@ -306,7 +466,7 @@ app.get('/api/pagespeed', async (req, res) => {
 // GTMETRIX
 // ═══════════════════════════════════════════════════════════════════════════════
 
-app.post('/api/gtmetrix/test', async (req, res) => {
+app.post('/api/gtmetrix/test', expensiveLimiter, budgetMiddleware('gtmetrix'), async (req, res) => {
   const { url } = req.body
   try {
     const data = await withCache(realtimeCache, `gtm_${url}`, async () => {
@@ -334,7 +494,7 @@ app.post('/api/gtmetrix/test', async (req, res) => {
 // EXA SEARCH (MCP equivalent — semantic web search)
 // ═══════════════════════════════════════════════════════════════════════════════
 
-app.post('/api/exa/search', async (req, res) => {
+app.post('/api/exa/search', expensiveLimiter, budgetMiddleware('exa'), async (req, res) => {
   const { query, numResults, type } = req.body
   try {
     const data = await withCache(historicalCache, `exa_search_${query}_${numResults}`, async () => {
@@ -350,7 +510,7 @@ app.post('/api/exa/search', async (req, res) => {
   } catch (e: any) { res.status(502).json({ error: 'Exa unavailable', detail: e.message }) }
 })
 
-app.post('/api/exa/find-similar', async (req, res) => {
+app.post('/api/exa/find-similar', expensiveLimiter, budgetMiddleware('exa'), async (req, res) => {
   const { url, numResults } = req.body
   try {
     const data = await withCache(historicalCache, `exa_similar_${url}_${numResults}`, async () => {
@@ -365,7 +525,7 @@ app.post('/api/exa/find-similar', async (req, res) => {
   } catch (e: any) { res.status(502).json({ error: 'Exa unavailable', detail: e.message }) }
 })
 
-app.post('/api/exa/contents', async (req, res) => {
+app.post('/api/exa/contents', expensiveLimiter, budgetMiddleware('exa'), async (req, res) => {
   const { urls } = req.body
   try {
     const data = await withCache(historicalCache, `exa_contents_${urls?.join(',')}`, async () => {
@@ -384,7 +544,7 @@ app.post('/api/exa/contents', async (req, res) => {
 // BROWSERLESS (MCP equivalent — scraping + Lighthouse)
 // ═══════════════════════════════════════════════════════════════════════════════
 
-app.post('/api/browserless/scrape', async (req, res) => {
+app.post('/api/browserless/scrape', expensiveLimiter, budgetMiddleware('browserless'), async (req, res) => {
   const { url } = req.body
   try {
     const data = await withCache(realtimeCache, `bl_scrape_${url}`, async () => {
@@ -406,7 +566,7 @@ app.post('/api/browserless/scrape', async (req, res) => {
   } catch (e: any) { res.status(502).json({ error: 'Browserless unavailable', detail: e.message }) }
 })
 
-app.post('/api/browserless/lighthouse', async (req, res) => {
+app.post('/api/browserless/lighthouse', expensiveLimiter, budgetMiddleware('browserless'), async (req, res) => {
   const { url, categories } = req.body
   try {
     const data = await withCache(realtimeCache, `bl_lh_${url}`, async () => {
@@ -426,7 +586,7 @@ app.post('/api/browserless/lighthouse', async (req, res) => {
   } catch (e: any) { res.status(502).json({ error: 'Browserless Lighthouse unavailable', detail: e.message }) }
 })
 
-app.post('/api/browserless/screenshot', async (req, res) => {
+app.post('/api/browserless/screenshot', expensiveLimiter, budgetMiddleware('browserless'), async (req, res) => {
   const { url } = req.body
   try {
     const data = await withCache(realtimeCache, `bl_ss_${url}`, async () => {
@@ -446,7 +606,7 @@ app.post('/api/browserless/screenshot', async (req, res) => {
 // THORBIT (MCP equivalent — content optimization)
 // ═══════════════════════════════════════════════════════════════════════════════
 
-app.post('/api/thorbit/analyze', async (req, res) => {
+app.post('/api/thorbit/analyze', expensiveLimiter, budgetMiddleware('thorbit'), async (req, res) => {
   const { url, keyword } = req.body
   try {
     const data = await withCache(historicalCache, `thorbit_${url}_${keyword}`, async () => {
@@ -460,7 +620,7 @@ app.post('/api/thorbit/analyze', async (req, res) => {
   } catch (e: any) { res.status(502).json({ error: 'Thorbit unavailable', detail: e.message }) }
 })
 
-app.post('/api/thorbit/suggestions', async (req, res) => {
+app.post('/api/thorbit/suggestions', expensiveLimiter, budgetMiddleware('thorbit'), async (req, res) => {
   const { content, keyword } = req.body
   try {
     const data = await withCache(historicalCache, `thorbit_sug_${keyword}`, async () => {
@@ -478,7 +638,7 @@ app.post('/api/thorbit/suggestions', async (req, res) => {
 // SE RANKING
 // ═══════════════════════════════════════════════════════════════════════════════
 
-app.get('/api/seranking/domain', async (req, res) => {
+app.get('/api/seranking/domain', expensiveLimiter, budgetMiddleware('seranking'), async (req, res) => {
   const { domain } = req.query as Record<string, string>
   try {
     const data = await withCache(realtimeCache, `ser_domain_${domain}`, async () => {
@@ -491,7 +651,7 @@ app.get('/api/seranking/domain', async (req, res) => {
   } catch (e: any) { res.status(502).json({ error: 'SE Ranking unavailable', detail: e.message }) }
 })
 
-app.get('/api/seranking/keywords', async (req, res) => {
+app.get('/api/seranking/keywords', expensiveLimiter, budgetMiddleware('seranking'), async (req, res) => {
   const { domain, limit } = req.query as Record<string, string>
   try {
     const data = await withCache(realtimeCache, `ser_kw_${domain}_${limit}`, async () => {
@@ -504,7 +664,7 @@ app.get('/api/seranking/keywords', async (req, res) => {
   } catch (e: any) { res.status(502).json({ error: 'SE Ranking unavailable', detail: e.message }) }
 })
 
-app.get('/api/seranking/competitors', async (req, res) => {
+app.get('/api/seranking/competitors', expensiveLimiter, budgetMiddleware('seranking'), async (req, res) => {
   const { domain } = req.query as Record<string, string>
   try {
     const data = await withCache(historicalCache, `ser_comp_${domain}`, async () => {
@@ -517,7 +677,7 @@ app.get('/api/seranking/competitors', async (req, res) => {
   } catch (e: any) { res.status(502).json({ error: 'SE Ranking unavailable', detail: e.message }) }
 })
 
-app.get('/api/seranking/backlinks', async (req, res) => {
+app.get('/api/seranking/backlinks', expensiveLimiter, budgetMiddleware('seranking'), async (req, res) => {
   const { domain } = req.query as Record<string, string>
   try {
     const data = await withCache(realtimeCache, `ser_bl_${domain}`, async () => {
@@ -535,7 +695,7 @@ app.get('/api/seranking/backlinks', async (req, res) => {
 // ═══════════════════════════════════════════════════════════════════════════════
 
 // Overview: combines ALL sources
-app.get('/api/overview', async (req, res) => {
+app.get('/api/overview', expensiveLimiter, async (req, res) => {
   const { domain } = req.query as Record<string, string>
   const today = new Date().toISOString().split('T')[0]
   const result: Record<string, any> = { domain, sources: {}, activeSources: [] }
@@ -595,7 +755,7 @@ app.get('/api/overview', async (req, res) => {
 })
 
 // Aggregated keywords from multiple sources
-app.get('/api/keywords/aggregated', async (req, res) => {
+app.get('/api/keywords/aggregated', expensiveLimiter, async (req, res) => {
   const { domain, limit } = req.query as Record<string, string>
   const today = new Date().toISOString().split('T')[0]
   const result: Record<string, any> = { domain, sources: {}, activeSources: [] }
@@ -627,7 +787,7 @@ app.get('/api/keywords/aggregated', async (req, res) => {
 })
 
 // Aggregated backlinks from multiple sources
-app.get('/api/backlinks/aggregated', async (req, res) => {
+app.get('/api/backlinks/aggregated', expensiveLimiter, async (req, res) => {
   const { domain } = req.query as Record<string, string>
   const result: Record<string, any> = { domain, sources: {}, activeSources: [] }
 
@@ -662,7 +822,7 @@ app.get('/api/backlinks/aggregated', async (req, res) => {
 })
 
 // Aggregated vitals from multiple sources
-app.post('/api/vitals/aggregated', async (req, res) => {
+app.post('/api/vitals/aggregated', expensiveLimiter, async (req, res) => {
   const { url } = req.body
   const result: Record<string, any> = { url, sources: {}, activeSources: [] }
 
@@ -693,7 +853,7 @@ app.post('/api/vitals/aggregated', async (req, res) => {
 })
 
 // Aggregated competitors from multiple sources
-app.get('/api/competitors/aggregated', async (req, res) => {
+app.get('/api/competitors/aggregated', expensiveLimiter, async (req, res) => {
   const { domain } = req.query as Record<string, string>
   const result: Record<string, any> = { domain, sources: {}, activeSources: [] }
 
@@ -724,7 +884,7 @@ app.get('/api/competitors/aggregated', async (req, res) => {
 })
 
 // Content analysis — Exa competitive content + Thorbit
-app.post('/api/content/analyze', async (req, res) => {
+app.post('/api/content/analyze', expensiveLimiter, async (req, res) => {
   const { domain, keyword } = req.body
   const result: Record<string, any> = { domain, keyword, sources: {}, activeSources: [] }
 
@@ -754,7 +914,7 @@ app.post('/api/content/analyze', async (req, res) => {
 })
 
 // Alerts — aggregated from all sources
-app.get('/api/alerts/aggregated', async (req, res) => {
+app.get('/api/alerts/aggregated', expensiveLimiter, async (req, res) => {
   const { domain } = req.query as Record<string, string>
   const alerts: any[] = []
 

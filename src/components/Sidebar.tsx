@@ -1,6 +1,18 @@
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { useSEO } from '@/contexts/SEOContext'
+
+// Fetch real alert count from the API
+async function fetchAlertCount(domain: string): Promise<number> {
+  try {
+    const res = await fetch(`/api/alerts/aggregated?domain=${encodeURIComponent(domain)}`)
+    if (!res.ok) return 0
+    const data = await res.json()
+    return data?.alerts?.length ?? 0
+  } catch {
+    return 0
+  }
+}
 
 const navItems = [
   { name: 'Dashboard', icon: DashboardIcon },
@@ -8,7 +20,7 @@ const navItems = [
   { name: 'Backlinks', icon: BacklinksIcon },
   { name: 'Pages', icon: PagesIcon },
   { name: 'Vitals', icon: VitalsIcon },
-  { name: 'Alerts', icon: AlertsIcon, badge: 3 },
+  { name: 'Alerts', icon: AlertsIcon },
   { name: 'Competitors', icon: CompetitorsIcon },
   { name: 'Content', icon: ContentIcon },
   { name: 'Settings', icon: SettingsIcon },
@@ -23,6 +35,16 @@ interface SidebarProps {
 
 export default function Sidebar({ activeNav, onNavChange, mobileOpen = false, onMobileClose }: SidebarProps) {
   const { domain } = useSEO()
+  const [alertCount, setAlertCount] = useState(0)
+
+  // Fetch real alert count when domain changes
+  useEffect(() => {
+    let cancelled = false
+    fetchAlertCount(domain).then(count => {
+      if (!cancelled) setAlertCount(count)
+    })
+    return () => { cancelled = true }
+  }, [domain])
 
   // Lock body scroll when mobile sidebar is open
   useEffect(() => {
@@ -66,9 +88,9 @@ export default function Sidebar({ activeNav, onNavChange, mobileOpen = false, on
               )}
               <item.icon active={isActive} />
               <span>{item.name}</span>
-              {item.badge && (
-                <span className="ml-auto bg-accent text-white text-[11px] font-semibold w-5 h-5 rounded-full flex items-center justify-center">
-                  {item.badge}
+              {item.name === 'Alerts' && alertCount > 0 && (
+                <span className="absolute -top-1 -right-1 min-w-[16px] h-4 px-1 rounded-full bg-red-500 text-white text-[9px] font-bold flex items-center justify-center">
+                  {alertCount > 9 ? '9+' : alertCount}
                 </span>
               )}
             </button>

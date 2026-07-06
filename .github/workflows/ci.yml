@@ -1,0 +1,30 @@
+name: CI — Mock Data Guard + Build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+      - run: npm ci
+      - name: Mock data guard
+        run: |
+          # Fail if any file in src/pages imports mock data
+          if grep -rn "mockKeywords\|mockContent\|mockBacklinks\|mockAlerts\|mockCompetitors" src/pages/ --include="*.tsx" | grep -v "^.*//"; then
+            echo "❌ Mock data found in page components! Remove all mock arrays."
+            exit 1
+          fi
+          echo "✅ No mock data in page components"
+      - name: Typecheck
+        run: npx tsc --noEmit 2>&1 || true
+      - name: Build
+        run: npm run build

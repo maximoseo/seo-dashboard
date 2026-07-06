@@ -1,5 +1,7 @@
 import { useState, useMemo } from 'react'
 import { motion } from 'framer-motion'
+import { useKeywords } from '../api/client'
+import { normalizeSemrushKeywords, normalizeAhrefsKeywords, normalizeDataForSEOKeywords, formatMetric } from '../api/normalize'
 
 type SortDir = 'asc' | 'desc'
 type SortKey = 'keyword' | 'volume' | 'position' | 'difficulty' | 'cpc' | 'traffic'
@@ -18,28 +20,7 @@ interface Keyword {
   traffic: number
 }
 
-const mockKeywords: Keyword[] = [
-  { keyword: 'seo tools', volume: 12100, position: 3, change: 2, url: '/tools', difficulty: 72, cpc: 4.50, serpFeatures: ['snippet', 'video', 'ai_overview'], intent: 'commercial', trend: [12,10,9,8,7,6,5,4,3,3], traffic: 3200 },
-  { keyword: 'keyword research', volume: 8100, position: 5, change: 1, url: '/tools/keyword-research', difficulty: 68, cpc: 3.80, serpFeatures: ['snippet', 'question'], intent: 'informational', trend: [14,12,11,10,9,8,7,6,5,5], traffic: 1800 },
-  { keyword: 'on page seo', volume: 6600, position: 7, change: -1, url: '/blog/on-page-seo', difficulty: 55, cpc: 2.90, serpFeatures: ['snippet'], intent: 'informational', trend: [4,5,5,5,6,6,6,6,7,7], traffic: 1200 },
-  { keyword: 'technical seo', volume: 4400, position: 9, change: 2, url: '/blog/technical-seo', difficulty: 61, cpc: 3.20, serpFeatures: ['video'], intent: 'informational', trend: [18,16,15,14,13,12,11,11,9,9], traffic: 890 },
-  { keyword: 'backlink strategy', volume: 3600, position: 12, change: -1, url: '/blog/backlink-strategy', difficulty: 48, cpc: 2.40, serpFeatures: ['question'], intent: 'informational', trend: [8,9,9,10,10,10,11,11,12,12], traffic: 420 },
-  { keyword: 'seo audit tool', volume: 2900, position: 4, change: 3, url: '/tools/seo-audit', difficulty: 65, cpc: 5.10, serpFeatures: ['snippet', 'shopping'], intent: 'transactional', trend: [15,13,11,9,8,7,6,5,4,4], traffic: 1500 },
-  { keyword: 'rank tracker', volume: 2400, position: 6, change: 0, url: '/tools/rank-tracker', difficulty: 58, cpc: 4.20, serpFeatures: ['ai_overview'], intent: 'commercial', trend: [6,6,6,6,6,6,6,6,6,6], traffic: 980 },
-  { keyword: 'domain authority checker', volume: 2200, position: 8, change: 1, url: '/tools/da-checker', difficulty: 42, cpc: 1.80, serpFeatures: ['snippet'], intent: 'navigational', trend: [12,11,10,10,9,9,8,8,8,8], traffic: 650 },
-  { keyword: 'seo best practices 2024', volume: 1900, position: 2, change: 4, url: '/blog/seo-best-practices', difficulty: 45, cpc: 2.10, serpFeatures: ['snippet', 'question', 'video'], intent: 'informational', trend: [20,18,15,12,10,8,6,4,3,2], traffic: 1100 },
-  { keyword: 'local seo', volume: 5400, position: 15, change: -2, url: '/blog/local-seo', difficulty: 52, cpc: 3.50, serpFeatures: ['local_pack'], intent: 'informational', trend: [10,11,12,12,13,13,14,14,15,15], traffic: 380 },
-  { keyword: 'content optimization', volume: 3100, position: 11, change: 1, url: '/blog/content-optimization', difficulty: 50, cpc: 2.70, serpFeatures: ['snippet'], intent: 'informational', trend: [14,13,13,12,12,12,11,11,11,11], traffic: 520 },
-  { keyword: 'serp analysis', volume: 1800, position: 6, change: 2, url: '/tools/serp-analysis', difficulty: 38, cpc: 3.90, serpFeatures: ['ai_overview'], intent: 'commercial', trend: [12,11,10,9,8,8,7,7,6,6], traffic: 740 },
-  { keyword: 'link building service', volume: 2600, position: 18, change: -3, url: '/services/link-building', difficulty: 75, cpc: 8.50, serpFeatures: ['shopping'], intent: 'transactional', trend: [12,13,14,14,15,16,16,17,18,18], traffic: 210 },
-  { keyword: 'website speed test', volume: 9900, position: 22, change: 1, url: '/tools/speed-test', difficulty: 70, cpc: 1.50, serpFeatures: ['snippet', 'video'], intent: 'navigational', trend: [25,24,24,23,23,23,22,22,22,22], traffic: 180 },
-  { keyword: 'meta description generator', volume: 1400, position: 3, change: 1, url: '/tools/meta-generator', difficulty: 32, cpc: 1.20, serpFeatures: ['snippet'], intent: 'transactional', trend: [8,7,6,5,5,4,4,3,3,3], traffic: 620 },
-  { keyword: 'google search console tips', volume: 1200, position: 10, change: 0, url: '/blog/gsc-tips', difficulty: 35, cpc: 0.90, serpFeatures: ['video', 'question'], intent: 'informational', trend: [10,10,10,10,10,10,10,10,10,10], traffic: 290 },
-  { keyword: 'ecommerce seo', volume: 3800, position: 14, change: 2, url: '/blog/ecommerce-seo', difficulty: 62, cpc: 4.80, serpFeatures: ['snippet', 'shopping'], intent: 'commercial', trend: [20,19,18,17,16,16,15,15,14,14], traffic: 350 },
-  { keyword: 'seo reporting', volume: 1600, position: 7, change: 3, url: '/tools/reporting', difficulty: 44, cpc: 3.60, serpFeatures: ['ai_overview'], intent: 'commercial', trend: [16,14,13,12,11,10,9,8,7,7], traffic: 580 },
-  { keyword: 'competitor analysis tool', volume: 2100, position: 5, change: 1, url: '/tools/competitor-analysis', difficulty: 56, cpc: 5.40, serpFeatures: ['snippet', 'video'], intent: 'commercial', trend: [10,9,8,8,7,7,6,6,5,5], traffic: 920 },
-  { keyword: 'schema markup generator', volume: 1100, position: 4, change: 2, url: '/tools/schema-generator', difficulty: 28, cpc: 1.60, serpFeatures: ['snippet'], intent: 'transactional', trend: [10,9,8,7,6,6,5,5,4,4], traffic: 480 },
-]
+// Mock data removed — now fetching from API via useKeywords hook
 
 const ITEMS_PER_PAGE = 10
 
@@ -89,8 +70,80 @@ export default function KeywordsPage() {
   const [sortDir, setSortDir] = useState<SortDir>('asc')
   const [page, setPage] = useState(1)
 
+  // Get domain from localStorage (set by dashboard)
+  const domain = localStorage.getItem('maximo:activeDomain') || 'galoz.co.il'
+  const { data: apiData } = useKeywords(domain)
+
+  // Normalize API data from multiple sources
+  const keywords: Keyword[] = useMemo(() => {
+    if (!apiData?.sources) return []
+    const result: Keyword[] = []
+    
+    // SEMrush keywords
+    if (apiData.sources.semrush) {
+      const semrushKw = normalizeSemrushKeywords(apiData.sources.semrush)
+      semrushKw.forEach(k => {
+        result.push({
+          keyword: k.keyword,
+          volume: k.volume ?? 0,
+          position: k.position ?? 0,
+          change: 0,
+          url: k.url ?? '',
+          difficulty: k.difficulty ?? 0,
+          cpc: 0,
+          serpFeatures: k.serpFeatures,
+          intent: 'informational',
+          trend: [],
+          traffic: 0,
+        })
+      })
+    }
+    
+    // Ahrefs keywords
+    if (apiData.sources.ahrefs?.keywords) {
+      const ahrefsKw = normalizeAhrefsKeywords(apiData.sources.ahrefs)
+      ahrefsKw.forEach(k => {
+        result.push({
+          keyword: k.keyword,
+          volume: k.volume ?? 0,
+          position: k.position ?? 0,
+          change: 0,
+          url: k.url ?? '',
+          difficulty: k.difficulty ?? 0,
+          cpc: 0,
+          serpFeatures: k.serpFeatures,
+          intent: 'informational',
+          trend: [],
+          traffic: 0,
+        })
+      })
+    }
+    
+    // DataForSEO keywords
+    if (apiData.sources.dataforseo) {
+      const dfsKw = normalizeDataForSEOKeywords(apiData.sources.dataforseo)
+      dfsKw.forEach(k => {
+        result.push({
+          keyword: k.keyword,
+          volume: k.volume ?? 0,
+          position: k.position ?? 0,
+          change: 0,
+          url: k.url ?? '',
+          difficulty: k.difficulty ?? 0,
+          cpc: 0,
+          serpFeatures: k.serpFeatures,
+          intent: 'informational',
+          trend: [],
+          traffic: 0,
+        })
+      })
+    }
+    
+    return result
+  }, [apiData])
+
   const filtered = useMemo(() => {
-    let data = [...mockKeywords]
+    let data = [...keywords]
     if (search) data = data.filter(k => k.keyword.toLowerCase().includes(search.toLowerCase()))
     if (posFilter !== 'all') {
       const ranges: Record<string, [number, number]> = { top3: [1,3], top10: [1,10], top50: [1,50], '51-100': [51,100] }
@@ -122,10 +175,10 @@ export default function KeywordsPage() {
   )
 
   const summaryCards = [
-    { label: 'Total Keywords', value: mockKeywords.length.toLocaleString(), change: '+8%', color: 'text-green' },
-    { label: 'Top 3', value: mockKeywords.filter(k => k.position <= 3).length.toString(), change: '+2', color: 'text-green' },
-    { label: 'Top 10', value: mockKeywords.filter(k => k.position <= 10).length.toString(), change: '+3', color: 'text-green' },
-    { label: 'Top 50', value: mockKeywords.filter(k => k.position <= 50).length.toString(), change: '+5', color: 'text-green' },
+    { label: 'Total Keywords', value: formatMetric(keywords.length), change: '—', color: 'text-blue' },
+    { label: 'Top 3', value: keywords.filter(k => k.position <= 3).length.toString(), change: '—', color: 'text-green' },
+    { label: 'Top 10', value: keywords.filter(k => k.position <= 10).length.toString(), change: '—', color: 'text-green' },
+    { label: 'Top 50', value: keywords.filter(k => k.position <= 50).length.toString(), change: '—', color: 'text-green' },
   ]
 
   return (
