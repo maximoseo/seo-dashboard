@@ -6,7 +6,11 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import rateLimit from 'express-rate-limit';
 import { z } from 'zod';
+import crypto from 'node:crypto';
 import { createClient } from '@supabase/supabase-js';
+import { generateAlerts } from './alerts/rules.js';
+import { createSeoTaskFromAlert } from './tasks/createSeoTask.js';
+import { renderReportMarkdown } from './reports/renderReport.js';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -30,12 +34,12 @@ app.use(express.json());
 // ═══════════════════════════════════════════════════════════════════════════════
 const generalLimiter = rateLimit({
     windowMs: 60_000, // 1 minute
-    max: 60, // 60 req/min per IP
+    max: 240, // SPA route reloads + dashboard widgets can burst above 60/min
     message: { error: 'Rate limit exceeded. Please slow down.' },
 });
 const expensiveLimiter = rateLimit({
     windowMs: 60_000,
-    max: 10, // 10 req/min for expensive providers
+    max: 30, // provider-backed endpoints are still capped separately by daily budgets
     message: { error: 'Rate limit exceeded for this provider. Please wait.' },
 });
 app.use('/api', generalLimiter);
@@ -45,43 +49,139 @@ app.use('/api', generalLimiter);
 const SUPABASE_URL = process.env.SUPABASE_URL || '';
 const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY || '';
 const AUTH_DISABLED = process.env.AUTH_DISABLED === 'true'; // for local dev only
-const supabase = SUPABASE_URL ? createClient(SUPABASE_URL, SUPABASE_ANON_KEY) : null;
-// Auth middleware — skips /api/health and /api/cache/clear for health checks
-app.use('/api', async (req, res, next) => {
-    // Skip auth for health check endpoint
-    if (req.path === '/health' || req.path === '/cache/clear') {
-        return next();
-    }
-    // Allow bypass in dev mode
-    if (AUTH_DISABLED) {
-        return next();
-    }
-    const token = req.get('authorization')?.replace(/^Bearer\s+/i, '');
-    if (!token) {
-        return res.status(401).json({ error: 'Authentication required. Provide a Bearer token.' });
-    }
-    if (!supabase) {
-        // Fallback: if Supabase not configured, use a shared API key check
-        // This is a temporary measure — Supabase Auth should be configured
-        const API_KEY = process.env.DASHBOARD_API_KEY;
-        if (API_KEY && token === API_KEY) {
-            return next();
-        }
-        return res.status(503).json({ error: 'Auth not configured. Set SUPABASE_URL and SUPABASE_ANON_KEY.' });
-    }
+const DASHBOARD_AUTH_USERNAME = process.env.DASHBOARD_AUTH_USERNAME || process.env.DASHBOARD_USERNAME || process.env.DASHBOARD_EMAIL || '';
+const DASHBOARD_AUTH_PASSWORD = process.env.DASHBOARD_AUTH_PASSWORD || process.env.DASHBOARD_PASSWORD || '';
+const DASHBOARD_AUTH_SECRET = process.env.DASHBOARD_AUTH_SECRET || process.env.DASHBOARD_API_KEY || '';
+const DEFAULT_DASHBOARD_TOKEN_TTL_SECONDS = 60 * 60 * 12;
+const parsedDashboardTokenTtl = Number(process.env.DASHBOARD_TOKEN_TTL_SECONDS || DEFAULT_DASHBOARD_TOKEN_TTL_SECONDS);
+const DASHBOARD_TOKEN_TTL_SECONDS = Number.isFinite(parsedDashboardTokenTtl) && parsedDashboardTokenTtl > 0
+    ? Math.floor(parsedDashboardTokenTtl)
+    : DEFAULT_DASHBOARD_TOKEN_TTL_SECONDS;
+const DASHBOARD_SESSION_COOKIE = 'maximo_dashboard_session';
+const supabase = SUPABASE_URL && SUPABASE_ANON_KEY ? createClient(SUPABASE_URL, SUPABASE_ANON_KEY) : null;
+function toBase64Url(value) {
+    return Buffer.from(value).toString('base64url');
+}
+function safeCompare(a, b) {
+    const left = Buffer.from(a);
+    const right = Buffer.from(b);
+    return left.length === right.length && crypto.timingSafeEqual(left, right);
+}
+function signDashboardToken(email) {
+    if (!DASHBOARD_AUTH_SECRET)
+        throw new Error('DASHBOARD_AUTH_SECRET is not configured');
+    const now = Math.floor(Date.now() / 1000);
+    const payload = {
+        sub: email,
+        email,
+        iat: now,
+        exp: now + DASHBOARD_TOKEN_TTL_SECONDS,
+        provider: 'dashboard',
+    };
+    const encodedPayload = toBase64Url(JSON.stringify(payload));
+    const signature = crypto.createHmac('sha256', DASHBOARD_AUTH_SECRET).update(encodedPayload).digest('base64url');
+    return {
+        token: `${encodedPayload}.${signature}`,
+        expiresAt: new Date(payload.exp * 1000).toISOString(),
+    };
+}
+function verifyDashboardToken(token) {
+    if (!DASHBOARD_AUTH_SECRET || !token.includes('.'))
+        return null;
+    const [encodedPayload, signature] = token.split('.', 2);
+    if (!encodedPayload || !signature)
+        return null;
+    const expected = crypto.createHmac('sha256', DASHBOARD_AUTH_SECRET).update(encodedPayload).digest('base64url');
+    if (!safeCompare(signature, expected))
+        return null;
     try {
-        const { data, error } = await supabase.auth.getUser(token);
-        if (error || !data?.user) {
-            return res.status(401).json({ error: 'Invalid or expired token.' });
-        }
-        // Attach user to request for downstream use
-        ;
-        req.user = data.user;
-        next();
+        const payload = JSON.parse(Buffer.from(encodedPayload, 'base64url').toString('utf8'));
+        if (payload.provider !== 'dashboard' || !payload.email || !payload.exp)
+            return null;
+        if (payload.exp < Math.floor(Date.now() / 1000))
+            return null;
+        return payload;
     }
     catch {
-        return res.status(401).json({ error: 'Authentication failed.' });
+        return null;
     }
+}
+function dashboardAuthConfigured() {
+    return Boolean(DASHBOARD_AUTH_USERNAME && DASHBOARD_AUTH_PASSWORD && DASHBOARD_AUTH_SECRET);
+}
+function attachDashboardUser(req, payload) {
+    ;
+    req.user = { id: payload.sub, email: payload.email, app_metadata: { provider: 'dashboard' } };
+}
+function getCookie(req, name) {
+    const raw = req.get('cookie') || '';
+    for (const part of raw.split(';')) {
+        const [key, ...valueParts] = part.trim().split('=');
+        if (key === name) {
+            try {
+                return decodeURIComponent(valueParts.join('='));
+            }
+            catch {
+                return null;
+            }
+        }
+    }
+    return null;
+}
+function sessionCookie(req, token, maxAgeSeconds) {
+    const secure = req.secure || req.get('x-forwarded-proto') === 'https' || process.env.VERCEL === '1';
+    return [
+        `${DASHBOARD_SESSION_COOKIE}=${encodeURIComponent(token)}`,
+        'HttpOnly',
+        'Path=/',
+        'SameSite=Lax',
+        `Max-Age=${maxAgeSeconds}`,
+        secure ? 'Secure' : '',
+    ].filter(Boolean).join('; ');
+}
+function clearSessionCookie(req) {
+    return sessionCookie(req, '', 0);
+}
+// Auth middleware — /api/health and /api/auth/login are intentionally public.
+app.use('/api', async (req, res, next) => {
+    if (req.path === '/health' || req.path === '/auth/login') {
+        return next();
+    }
+    // Allow bypass in explicit local dev mode only.
+    if (AUTH_DISABLED) {
+        ;
+        req.user = { id: 'dev', email: 'dev@local', app_metadata: { provider: 'dev' } };
+        return next();
+    }
+    const token = req.get('authorization')?.replace(/^Bearer\s+/i, '') || getCookie(req, DASHBOARD_SESSION_COOKIE);
+    if (!token) {
+        return res.status(401).json({ error: 'Authentication required. Sign in to create a dashboard session.' });
+    }
+    const dashboardPayload = verifyDashboardToken(token);
+    if (dashboardPayload) {
+        attachDashboardUser(req, dashboardPayload);
+        return next();
+    }
+    if (supabase) {
+        try {
+            const { data, error } = await supabase.auth.getUser(token);
+            if (!error && data?.user) {
+                ;
+                req.user = data.user;
+                return next();
+            }
+        }
+        catch {
+            // Fall through to API key check below.
+        }
+    }
+    const API_KEY = process.env.DASHBOARD_API_KEY;
+    if (API_KEY && safeCompare(token, API_KEY)) {
+        ;
+        req.user = { id: 'api-key', email: 'api-key@local', app_metadata: { provider: 'api-key' } };
+        return next();
+    }
+    return res.status(401).json({ error: 'Invalid or expired token.' });
 });
 // ═══════════════════════════════════════════════════════════════════════════════
 // SECURITY: Zod validation schemas
@@ -115,6 +215,40 @@ function validateBody(schema) {
         next();
     };
 }
+const loginLimiter = rateLimit({
+    windowMs: 60_000,
+    max: 8,
+    message: { error: 'Too many login attempts. Please wait and try again.' },
+});
+const loginSchema = z.object({
+    username: z.string().min(1),
+    password: z.string().min(1),
+});
+app.post('/api/auth/login', loginLimiter, validateBody(loginSchema), (req, res) => {
+    if (!dashboardAuthConfigured()) {
+        return res.status(503).json({ error: 'Dashboard auth is not configured.' });
+    }
+    const { username, password } = req.validatedBody;
+    const usernameOk = safeCompare(username.toLowerCase(), DASHBOARD_AUTH_USERNAME.toLowerCase());
+    const passwordOk = safeCompare(password, DASHBOARD_AUTH_PASSWORD);
+    if (!usernameOk || !passwordOk) {
+        return res.status(401).json({ error: 'Invalid username or password.' });
+    }
+    const { token, expiresAt } = signDashboardToken(DASHBOARD_AUTH_USERNAME);
+    res.setHeader('Set-Cookie', sessionCookie(req, token, DASHBOARD_TOKEN_TTL_SECONDS));
+    return res.json({
+        expiresAt,
+        user: { email: DASHBOARD_AUTH_USERNAME, provider: 'dashboard' },
+    });
+});
+app.get('/api/auth/me', (req, res) => {
+    const user = req.user || null;
+    return res.json({ authenticated: Boolean(user), user });
+});
+app.post('/api/auth/logout', (req, res) => {
+    res.setHeader('Set-Cookie', clearSessionCookie(req));
+    return res.json({ ok: true });
+});
 // ═══════════════════════════════════════════════════════════════════════════════
 // SECURITY: Per-provider daily budget caps
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -972,39 +1106,124 @@ app.get('/api/alerts/aggregated', expensiveLimiter, async (req, res) => {
         alerts.push({ severity: 'info', source: 'System', module: 'API', message: 'Ahrefs API returned an error — data may be incomplete', timestamp: new Date().toISOString() });
     if (pagespeed.status === 'rejected')
         alerts.push({ severity: 'info', source: 'System', module: 'API', message: 'PageSpeed API unavailable — vitals data incomplete', timestamp: new Date().toISOString() });
-    res.json({ alerts, activeSources: ['Ahrefs', 'PageSpeed', 'SE Ranking', 'DataForSEO'].filter(Boolean) });
+    const rawPerformanceScore = pagespeed.status === 'fulfilled'
+        ? pagespeed.value.data?.lighthouseResult?.categories?.performance?.score
+        : null;
+    const ruleAlerts = generateAlerts({
+        domain,
+        organicTraffic: ahrefsMetrics.status === 'fulfilled' ? ahrefsMetrics.value.data?.metrics?.org_traffic ?? null : null,
+        top10Keywords: ahrefsMetrics.status === 'fulfilled' ? ahrefsMetrics.value.data?.metrics?.org_keywords_1_10 ?? null : null,
+        performanceScore: typeof rawPerformanceScore === 'number' ? Math.round(rawPerformanceScore * 100) : null,
+        providerErrors: [
+            ahrefsMetrics.status === 'rejected' ? { provider: 'Ahrefs', errorClass: 'network' } : null,
+            pagespeed.status === 'rejected' ? { provider: 'PageSpeed', errorClass: 'network' } : null,
+        ].filter(Boolean),
+    }).map(alert => ({
+        ...alert,
+        source: 'Rules Engine',
+        message: alert.detail,
+        description: alert.detail,
+        time: 'now',
+        timestamp: new Date(alert.createdAt).getTime(),
+        status: 'unread',
+    }));
+    const activeSources = [
+        ahrefsMetrics.status === 'fulfilled' ? 'Ahrefs' : null,
+        pagespeed.status === 'fulfilled' ? 'PageSpeed' : null,
+        'Rules Engine',
+    ].filter(Boolean);
+    res.json({ alerts: [...ruleAlerts, ...alerts], activeSources });
+});
+const demoClients = [
+    { id: 'maximo', name: 'Maximo SEO', domain: 'maximo-seo.ai', market: 'Israel / Global', status: 'active', priority: 'Primary' },
+    { id: 'galoz', name: 'Galoz', domain: 'galoz.co.il', market: 'Israel', status: 'ready', priority: 'Client' },
+];
+app.get('/api/clients', (_req, res) => {
+    res.json({ clients: demoClients, source: supabase ? 'supabase-ready' : 'local-seed', fetchedAt: new Date().toISOString() });
+});
+app.get('/api/tasks', (req, res) => {
+    const { domain = 'maximo-seo.ai' } = req.query;
+    const seedAlerts = generateAlerts({
+        domain,
+        previousOrganicTraffic: 1000,
+        organicTraffic: 730,
+        brokenPagesWithBacklinks: 1,
+        performanceScore: 62,
+    });
+    res.json({
+        tasks: seedAlerts.map(createSeoTaskFromAlert),
+        source: 'rules-engine',
+        fetchedAt: new Date().toISOString(),
+    });
+});
+app.post('/api/reports/preview', validateBody(z.object({
+    domain: domainSchema,
+    sections: z.array(z.object({ title: z.string().min(1), body: z.string().min(1) })).min(1),
+})), (req, res) => {
+    const report = renderReportMarkdown(req.validatedBody);
+    res.type('text/markdown').send(report);
+});
+app.get('/api/local-seo/overview', (req, res) => {
+    const { domain = 'maximo-seo.ai' } = req.query;
+    res.json({
+        domain,
+        source: 'planned-module',
+        checks: [
+            { name: 'GBP health', status: 'planned', detail: 'Connect Google Business Profile or Local Falcon grid data.' },
+            { name: 'Reviews velocity', status: 'planned', detail: 'Track review count, rating and response SLA.' },
+            { name: 'NAP consistency', status: 'planned', detail: 'Compare business identity across citations.' },
+        ],
+    });
+});
+app.get('/api/geo-ai/overview', (req, res) => {
+    const { domain = 'maximo-seo.ai' } = req.query;
+    res.json({
+        domain,
+        source: 'planned-module',
+        checks: [
+            { name: 'AI Overview visibility', status: 'planned' },
+            { name: 'Entity completeness', status: 'planned' },
+            { name: 'Citation opportunities', status: 'planned' },
+        ],
+    });
 });
 // ═══════════════════════════════════════════════════════════════════════════════
 // HEALTH CHECK + TOOLS STATUS
 // ═══════════════════════════════════════════════════════════════════════════════
+function providerStatus() {
+    const providerConfig = {
+        ahrefs: !!AHREFS_API_KEY,
+        semrush: !!SEMRUSH_API_KEY,
+        dataforseo: !!(DATAFORSEO_LOGIN && DATAFORSEO_PASSWORD),
+        pagespeed: !!PAGESPEED_API_KEY,
+        gtmetrix: !!GTMETRIX_API_KEY,
+        seranking: !!SE_RANKING_API,
+        exa: !!EXA_API_KEY,
+        browserless: !!BROWSERLESS_API_KEY,
+        thorbit: !!THORBIT_API_KEY,
+    };
+    return Object.fromEntries(Object.entries(providerConfig).map(([name, configured]) => [
+        name,
+        configured
+            ? { ok: true, configured, latency: 0 }
+            : { ok: false, configured, error: 'Not configured' },
+    ]));
+}
 app.get('/api/health', async (_req, res) => {
-    const statuses = {};
-    const checks = [
-        { name: 'ahrefs', configured: !!AHREFS_API_KEY, fn: () => axios.get('https://api.ahrefs.com/v3/site-explorer/domain-rating', { params: { target: 'ahrefs.com', date: new Date().toISOString().split('T')[0] }, headers: { Authorization: `Bearer ${AHREFS_API_KEY}` }, timeout: 5000 }) },
-        { name: 'semrush', configured: !!SEMRUSH_API_KEY, fn: () => axios.get('https://api.semrush.com/', { params: { type: 'domain_ranks', key: SEMRUSH_API_KEY, domain: 'semrush.com', database: 'us', export_columns: 'Dn' }, timeout: 5000 }) },
-        { name: 'dataforseo', configured: !!(DATAFORSEO_LOGIN && DATAFORSEO_PASSWORD), fn: () => axios.get('https://api.dataforseo.com/v3/appendix/user_data', { headers: { Authorization: `Basic ${DATAFORSEO_AUTH}` }, timeout: 5000 }) },
-        { name: 'pagespeed', configured: !!PAGESPEED_API_KEY, fn: () => axios.get('https://www.googleapis.com/pagespeedonline/v5/runPagespeed', { params: { url: 'https://google.com', strategy: 'mobile', key: PAGESPEED_API_KEY }, timeout: 15000 }) },
-        { name: 'gtmetrix', configured: !!GTMETRIX_API_KEY, fn: () => axios.get('https://gtmetrix.com/api/2.0/status', { headers: { Authorization: `Basic ${Buffer.from(`${GTMETRIX_EMAIL}:${GTMETRIX_API_KEY}`).toString('base64')}` }, timeout: 5000 }) },
-        { name: 'seranking', configured: !!SE_RANKING_API, fn: () => axios.get('https://api4.seranking.com/system/status', { headers: { Authorization: `Token ${SE_RANKING_API}` }, timeout: 5000 }) },
-        { name: 'exa', configured: !!EXA_API_KEY, fn: () => axios.post('https://api.exa.ai/search', { query: 'test', numResults: 1 }, { headers: { 'x-api-key': EXA_API_KEY, 'Content-Type': 'application/json' }, timeout: 5000 }) },
-        { name: 'browserless', configured: !!BROWSERLESS_API_KEY, fn: () => axios.get(`https://chrome.browserless.io/pressure?token=${BROWSERLESS_API_KEY}`, { timeout: 5000 }) },
-        { name: 'thorbit', configured: !!THORBIT_API_KEY, fn: () => axios.get('https://api.thorbit.com/v1/status', { headers: { Authorization: `Bearer ${THORBIT_API_KEY}` }, timeout: 5000 }) },
-    ];
-    await Promise.allSettled(checks.map(async ({ name, configured, fn }) => {
-        if (!configured) {
-            statuses[name] = { ok: false, error: 'Not configured', configured: false };
-            return;
-        }
-        const start = Date.now();
-        try {
-            await fn();
-            statuses[name] = { ok: true, latency: Date.now() - start, configured: true };
-        }
-        catch (e) {
-            statuses[name] = { ok: false, error: e.message, latency: Date.now() - start, configured: true };
-        }
-    }));
-    res.json({ statuses, cacheStats: { realtime: realtimeCache.getStats(), historical: historicalCache.getStats() } });
+    res.json({ ok: true, service: 'seo-dashboard-api', timestamp: new Date().toISOString() });
+});
+app.get('/api/status', async (_req, res) => {
+    res.json({
+        ok: true,
+        service: 'seo-dashboard-api',
+        timestamp: new Date().toISOString(),
+        auth: {
+            configured: dashboardAuthConfigured() || Boolean(supabase),
+            mode: dashboardAuthConfigured() ? 'dashboard-cookie' : supabase ? 'supabase' : 'not-configured',
+        },
+        statuses: providerStatus(),
+        cacheStats: { realtime: realtimeCache.getStats(), historical: historicalCache.getStats() },
+    });
 });
 // Cache management
 app.post('/api/cache/clear', (_req, res) => {
@@ -1020,7 +1239,9 @@ if (process.env.NODE_ENV === 'production') {
         res.sendFile(path.join(distPath, 'index.html'));
     });
 }
-app.listen(PORT, () => {
-    console.log(`SEO Dashboard API server running on port ${PORT}`);
-});
+if (process.env.VERCEL !== '1' && process.env.NODE_ENV !== 'test') {
+    app.listen(PORT, () => {
+        console.log(`SEO Dashboard API server running on port ${PORT}`);
+    });
+}
 export default app;

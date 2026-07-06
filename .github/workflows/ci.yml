@@ -1,4 +1,4 @@
-name: CI — Mock Data Guard + Build
+name: CI — Verify SEO Dashboard
 
 on:
   push:
@@ -6,25 +6,42 @@ on:
   pull_request:
     branches: [main]
 
+permissions:
+  contents: read
+
 jobs:
-  build:
+  verify:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
           cache: 'npm'
       - run: npm ci
-      - name: Mock data guard
+      - name: No committed env files
         run: |
-          # Fail if any file in src/pages imports mock data
-          if grep -rn "mockKeywords\|mockContent\|mockBacklinks\|mockAlerts\|mockCompetitors" src/pages/ --include="*.tsx" | grep -v "^.*//"; then
-            echo "❌ Mock data found in page components! Remove all mock arrays."
+          if git ls-files | grep -E '(^|/)\.env(\.|$|$)' | grep -v 'env.example'; then
+            echo "❌ Committed .env file detected"
             exit 1
           fi
-          echo "✅ No mock data in page components"
+      - name: Mock data guard
+        run: |
+          if grep -rn "mockKeywords\|mockContent\|mockBacklinks\|mockAlerts\|mockCompetitors\|mockPages" src/pages/ --include="*.tsx" | cut -d: -f3- | grep -vE '^[[:space:]]*//'; then
+            echo "❌ Mock data found in page components. Mark demo data explicitly or move it behind a demo-state badge."
+            exit 1
+          fi
+          echo "✅ No unlabelled mock data in page components"
       - name: Typecheck
-        run: npx tsc --noEmit 2>&1 || true
+        run: npm run typecheck
+      - name: Tests
+        run: npm test
+      - name: Lint
+        run: npm run lint
       - name: Build
         run: npm run build
+      - name: Secret scan
+        run: docker run --rm -v "$PWD:/repo" zricethezav/gitleaks:latest dir /repo --redact --no-banner

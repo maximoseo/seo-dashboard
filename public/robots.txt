@@ -1,0 +1,4 @@
+User-agent: *
+Disallow: /
+
+# Private dashboard. Public marketing pages should live on the main website, not here.

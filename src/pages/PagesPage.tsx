@@ -1,5 +1,6 @@
 import { useState, useMemo } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
+import DataStateBadge from '@/components/DataStateBadge'
 
 interface PageData {
   url: string
@@ -15,7 +16,7 @@ interface PageData {
   loadTime: number
 }
 
-const mockPages: PageData[] = [
+const demoPages: PageData[] = [
   { url: '/', title: 'SEO Pro - Best SEO Tools & Software', status: 200, traffic: 12500, keywords: 245, backlinks: 890, score: 94, contentType: 'page', lastCrawled: '2024-10-30', wordCount: 2400, loadTime: 1.2 },
   { url: '/blog/seo-best-practices', title: 'SEO Best Practices for 2024 - Complete Guide', status: 200, traffic: 6200, keywords: 189, backlinks: 340, score: 91, contentType: 'blog', lastCrawled: '2024-10-30', wordCount: 4500, loadTime: 1.8 },
   { url: '/tools/keyword-research', title: 'Free Keyword Research Tool', status: 200, traffic: 4800, keywords: 156, backlinks: 210, score: 88, contentType: 'page', lastCrawled: '2024-10-30', wordCount: 1800, loadTime: 2.1 },
@@ -56,7 +57,7 @@ export default function PagesPage() {
   const [expandedUrl, setExpandedUrl] = useState<string | null>(null)
 
   const filtered = useMemo(() => {
-    let data = [...mockPages]
+    let data = [...demoPages]
     if (search) data = data.filter(p => p.url.toLowerCase().includes(search.toLowerCase()) || p.title.toLowerCase().includes(search.toLowerCase()))
     if (statusFilter !== 'all') {
       if (statusFilter === '2xx') data = data.filter(p => p.status >= 200 && p.status < 300)
@@ -71,10 +72,10 @@ export default function PagesPage() {
   const paginated = filtered.slice((page - 1) * ITEMS_PER_PAGE, page * ITEMS_PER_PAGE)
 
   const summaryCards = [
-    { label: 'Total Pages', value: mockPages.length.toString(), color: 'text-fg' },
-    { label: 'Healthy (2xx)', value: mockPages.filter(p => p.status >= 200 && p.status < 300).length.toString(), color: 'text-green' },
-    { label: 'Redirects (3xx)', value: mockPages.filter(p => p.status >= 300 && p.status < 400).length.toString(), color: 'text-yellow' },
-    { label: 'Errors (4xx/5xx)', value: mockPages.filter(p => p.status >= 400).length.toString(), color: 'text-red' },
+    { label: 'Total Pages', value: demoPages.length.toString(), color: 'text-fg' },
+    { label: 'Healthy (2xx)', value: demoPages.filter(p => p.status >= 200 && p.status < 300).length.toString(), color: 'text-green' },
+    { label: 'Redirects (3xx)', value: demoPages.filter(p => p.status >= 300 && p.status < 400).length.toString(), color: 'text-yellow' },
+    { label: 'Errors (4xx/5xx)', value: demoPages.filter(p => p.status >= 400).length.toString(), color: 'text-red' },
   ]
 
   return (
@@ -86,6 +87,7 @@ export default function PagesPage() {
           <p className="text-xs md:text-sm text-fg-muted mt-0.5">Crawled pages with on-page audit data</p>
         </div>
         <div className="flex gap-1.5 flex-wrap">
+          <DataStateBadge state="demo" source="crawl placeholder" />
           <span className="text-[11px] md:text-xs bg-purple-500/20 text-purple-300 border border-purple-500/30 px-2 py-1 rounded touch-target-reset">DataForSEO</span>
           <span className="text-[11px] md:text-xs bg-teal-500/20 text-teal-300 border border-teal-500/30 px-2 py-1 rounded touch-target-reset">Browserless</span>
         </div>

@@ -1,16 +1,14 @@
 import { useQuery } from '@tanstack/react-query'
+import { authFetch } from '@/lib/authToken'
 import { normalizeSemrush, normalizeAhrefs, normalizeOverview } from './normalize'
 
 const API_BASE = import.meta.env.VITE_API_URL || ''
 
 async function fetchAPI(endpoint: string, params?: Record<string, string>) {
-  const url = new URL(`${API_BASE}/api/${endpoint}`)
+  const url = new URL(`${API_BASE}/api/${endpoint}`, window.location.origin)
   if (params) Object.entries(params).forEach(([k, v]) => url.searchParams.set(k, v))
-  
-  const token = localStorage.getItem('maximo:auth_token')
-  const res = await fetch(url, {
-    headers: token ? { Authorization: `Bearer ${token}` } : {},
-  })
+
+  const res = await authFetch(url)
   if (!res.ok) throw new Error(`${endpoint} failed: ${res.status}`)
   return res.json()
 }
@@ -33,10 +31,7 @@ export function useOverview(domain: string | null) {
 export function useKeywords(domain: string | null) {
   return useQuery({
     queryKey: ['keywords', domain],
-    queryFn: async () => {
-      const data = await fetchAPI('keywords/aggregated', { domain: domain!, limit: '50' })
-      return data
-    },
+    queryFn: async () => fetchAPI('keywords/aggregated', { domain: domain!, limit: '50' }),
     enabled: !!domain,
     staleTime: 10 * 60 * 1000,
   })
@@ -45,10 +40,7 @@ export function useKeywords(domain: string | null) {
 export function useAlerts(domain: string | null) {
   return useQuery({
     queryKey: ['alerts', domain],
-    queryFn: async () => {
-      const data = await fetchAPI('alerts/aggregated', { domain: domain! })
-      return data
-    },
+    queryFn: async () => fetchAPI('alerts/aggregated', { domain: domain! }),
     enabled: !!domain,
     staleTime: 2 * 60 * 1000,
   })

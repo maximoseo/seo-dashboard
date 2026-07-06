@@ -1,4 +1,6 @@
-// Frontend service for SEMrush — calls Express backend endpoints
+// Frontend service for SEMrush — calls backend endpoints
+import { authFetch } from '@/lib/authToken'
+
 const CACHE_TTL_SHORT = 5 * 60 * 1000
 const CACHE_TTL_LONG = 24 * 60 * 60 * 1000
 
@@ -55,7 +57,7 @@ export async function fetchDomainOverview(domain: string): Promise<SemrushDomain
   if (cached) return cached
 
   try {
-    const res = await fetch(`/api/semrush/domain-overview?domain=${encodeURIComponent(domain)}`)
+    const res = await authFetch(`/api/semrush/domain-overview?domain=${encodeURIComponent(domain)}`)
     if (!res.ok) throw new Error(`SEMrush error: ${res.status}`)
     const data = await res.json()
     if (!data) return null
@@ -82,7 +84,7 @@ export async function fetchCompetitors(domain: string): Promise<SemrushCompetito
   if (cached) return cached
 
   try {
-    const res = await fetch(`/api/semrush/competitors?domain=${encodeURIComponent(domain)}`)
+    const res = await authFetch(`/api/semrush/competitors?domain=${encodeURIComponent(domain)}`)
     if (!res.ok) throw new Error(`SEMrush error: ${res.status}`)
     const data = await res.json()
     if (!Array.isArray(data)) return []
@@ -107,7 +109,7 @@ export async function fetchKeywordOverview(keyword: string): Promise<any> {
   if (cached) return cached
 
   try {
-    const res = await fetch(`/api/semrush/keyword-overview?keyword=${encodeURIComponent(keyword)}`)
+    const res = await authFetch(`/api/semrush/keyword-overview?keyword=${encodeURIComponent(keyword)}`)
     if (!res.ok) throw new Error(`SEMrush error: ${res.status}`)
     const data = await res.json()
     setCache(cacheKey, data, CACHE_TTL_LONG)

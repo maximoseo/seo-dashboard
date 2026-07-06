@@ -1,8 +1,15 @@
 // Multi-source SEO API service
-// All calls go through the Express backend at /api/*
+// All calls go through the backend at /api/*
+
+import { authFetch, createAuthorizedHeaders } from '@/lib/authToken'
 
 const CACHE_TTL_REALTIME = 5 * 60 * 1000 // 5 minutes
 const CACHE_TTL_HISTORICAL = 24 * 60 * 60 * 1000 // 24 hours
+const API_BASE = import.meta.env.VITE_API_URL || ''
+
+function apiUrl(path: string): string {
+  return `${API_BASE}${path}`
+}
 
 function getCached<T>(key: string): T | null {
   try {
@@ -33,7 +40,10 @@ async function apiFetch<T>(url: string, options?: RequestInit & { cacheTtl?: num
   if (cached) return cached
 
   const { cacheTtl, ...fetchOptions } = options || {}
-  const res = await fetch(url, fetchOptions)
+  const res = await authFetch(apiUrl(url), {
+    ...fetchOptions,
+    headers: createAuthorizedHeaders(fetchOptions.headers),
+  })
   if (!res.ok) {
     const text = await res.text().catch(() => '')
     throw new Error(`API ${res.status}: ${text.slice(0, 200)}`)
@@ -240,7 +250,11 @@ export async function fetchAggregatedBacklinks(domain: string, limit = 50): Prom
 }
 
 export async function fetchAggregatedVitals(domain: string): Promise<AggregatedVitals> {
-  return apiFetch<AggregatedVitals>(`/api/vitals/aggregated?domain=${encodeURIComponent(domain)}`)
+  return apiFetch<AggregatedVitals>('/api/vitals/aggregated', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ url: `https://${domain}` }),
+  })
 }
 
 export async function fetchAggregatedCompetitors(domain: string): Promise<AggregatedCompetitors> {
@@ -250,9 +264,10 @@ export async function fetchAggregatedCompetitors(domain: string): Promise<Aggreg
 }
 
 export async function fetchContentAnalysis(domain: string, keyword?: string): Promise<ContentAnalysis> {
-  const params = new URLSearchParams({ domain })
-  if (keyword) params.set('keyword', keyword)
-  return apiFetch<ContentAnalysis>(`/api/content/analyze?${params}`, {
+  return apiFetch<ContentAnalysis>('/api/content/analyze', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ domain, keyword: keyword || domain }),
     cacheTtl: CACHE_TTL_HISTORICAL,
   })
 }
@@ -273,7 +288,7 @@ export async function fetchExaSearch(query: string, numResults = 10) {
 }
 
 export async function fetchExaFetch(urls: string[]) {
-  return apiFetch<any>('/api/exa/fetch', {
+  return apiFetch<any>('/api/exa/contents', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ urls }),
@@ -284,11 +299,18 @@ export async function fetchExaFetch(urls: string[]) {
 // ─── Browserless (Lighthouse, scraping) ───────────────────────────────────────
 
 export async function fetchBrowserlessLighthouse(url: string) {
-  return apiFetch<any>(`/api/browserless/lighthouse?url=${encodeURIComponent(url)}`)
+  return apiFetch<any>('/api/browserless/lighthouse', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ url }),
+  })
 }
 
 export async function fetchBrowserlessScrape(url: string) {
-  return apiFetch<any>(`/api/browserless/scrape?url=${encodeURIComponent(url)}`, {
+  return apiFetch<any>('/api/browserless/scrape', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ url }),
     cacheTtl: CACHE_TTL_HISTORICAL,
   })
 }
@@ -296,12 +318,14 @@ export async function fetchBrowserlessScrape(url: string) {
 // ─── Health & Cache ───────────────────────────────────────────────────────────
 
 export async function fetchApiHealth(): Promise<ApiHealthStatus> {
-  const res = await fetch('/api/health')
+  const res = await authFetch(apiUrl('/api/status'))
+  if (!res.ok) throw new Error(`Status check failed: ${res.status}`)
   return res.json()
 }
 
 export async function clearApiCache(): Promise<void> {
-  await fetch('/api/cache/clear', { method: 'POST' })
+  const res = await authFetch(apiUrl('/api/cache/clear'), { method: 'POST' })
+  if (!res.ok) throw new Error(`Cache clear failed: ${res.status}`)
   // Also clear frontend session cache
   const keys = Object.keys(sessionStorage).filter(k => k.startsWith('seo_cache_'))
   keys.forEach(k => sessionStorage.removeItem(k))

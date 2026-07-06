@@ -220,7 +220,7 @@ export default function SettingsPage() {
           <div className="bg-bg-darkest rounded-lg border border-border p-3.5 md:p-3 font-mono text-[11px] md:text-xs text-fg-dim space-y-1 overflow-x-auto">
             <p>AHREFS_API_KEY=••••••••••••••••</p>
             <p>SEMRUSH_API=••••••••••••••••</p>
-            <p>DATAFORSEO_LOGIN=service@maximo-seo.com</p>
+            <p>DATAFORSEO_LOGIN=••••••••••••••••</p>
             <p>PAGESPEED_API_KEY=••••••••••••••••</p>
             <p>GTMETRIX_API=••••••••••••••••</p>
             <p>SE_RANKING_API=••••••••••••••••</p>

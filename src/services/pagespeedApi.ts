@@ -1,4 +1,6 @@
-// Frontend service for PageSpeed Insights — calls Express backend
+// Frontend service for PageSpeed Insights — calls backend
+import { authFetch } from '@/lib/authToken'
+
 const CACHE_TTL = 24 * 60 * 60 * 1000
 
 function getCached<T>(key: string): T | null {
@@ -90,7 +92,7 @@ export async function fetchPageSpeed(url: string, strategy: 'mobile' | 'desktop'
 
   try {
     const apiUrl = `/api/pagespeed?url=${encodeURIComponent(url)}&strategy=${strategy}`
-    const res = await fetch(apiUrl)
+    const res = await authFetch(apiUrl)
     if (!res.ok) throw new Error(`PageSpeed error: ${res.status}`)
     const json = await res.json()
 

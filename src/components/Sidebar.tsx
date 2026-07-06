@@ -1,11 +1,13 @@
 import { useEffect, useState } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { useSEO } from '@/contexts/SEOContext'
+import { useAuth } from '@/contexts/AuthContext'
+import { authFetch } from '@/lib/authToken'
 
 // Fetch real alert count from the API
 async function fetchAlertCount(domain: string): Promise<number> {
   try {
-    const res = await fetch(`/api/alerts/aggregated?domain=${encodeURIComponent(domain)}`)
+    const res = await authFetch(`/api/alerts/aggregated?domain=${encodeURIComponent(domain)}`)
     if (!res.ok) return 0
     const data = await res.json()
     return data?.alerts?.length ?? 0
@@ -16,13 +18,18 @@ async function fetchAlertCount(domain: string): Promise<number> {
 
 const navItems = [
   { name: 'Dashboard', icon: DashboardIcon },
+  { name: 'Clients', icon: CompetitorsIcon },
   { name: 'Keywords', icon: KeywordsIcon },
   { name: 'Backlinks', icon: BacklinksIcon },
   { name: 'Pages', icon: PagesIcon },
   { name: 'Vitals', icon: VitalsIcon },
-  { name: 'Alerts', icon: AlertsIcon },
-  { name: 'Competitors', icon: CompetitorsIcon },
   { name: 'Content', icon: ContentIcon },
+  { name: 'Competitors', icon: CompetitorsIcon },
+  { name: 'Local SEO', icon: PagesIcon },
+  { name: 'GEO / AI', icon: ContentIcon },
+  { name: 'Alerts', icon: AlertsIcon },
+  { name: 'Tasks', icon: AlertsIcon },
+  { name: 'Reports', icon: PagesIcon },
   { name: 'Settings', icon: SettingsIcon },
 ]
 
@@ -35,6 +42,7 @@ interface SidebarProps {
 
 export default function Sidebar({ activeNav, onNavChange, mobileOpen = false, onMobileClose }: SidebarProps) {
   const { domain } = useSEO()
+  const { user, logout } = useAuth()
   const [alertCount, setAlertCount] = useState(0)
 
   // Fetch real alert count when domain changes
@@ -53,6 +61,9 @@ export default function Sidebar({ activeNav, onNavChange, mobileOpen = false, on
       return () => { document.body.style.overflow = '' }
     }
   }, [mobileOpen])
+
+  const identityLabel = user?.email?.split('@')[0] || domain || 'Dashboard User'
+  const identityInitial = identityLabel.trim().charAt(0).toUpperCase() || 'U'
 
   const sidebarContent = (
     <>
@@ -116,23 +127,21 @@ export default function Sidebar({ activeNav, onNavChange, mobileOpen = false, on
 
       {/* Plan Info */}
       <div className="px-5 py-3 border-t border-border">
-        <p className="text-xs font-medium text-fg">Pro Plan</p>
-        <p className="text-[11px] text-fg-dim mt-0.5">8 APIs Connected</p>
+        <p className="text-xs font-medium text-fg">Protected Workspace</p>
+        <p className="text-[11px] text-fg-dim mt-0.5">Live + cached provider states</p>
       </div>
 
       {/* User Profile */}
       <div className="px-3 pb-4">
-        <button className="w-full flex items-center gap-2.5 px-3 py-2.5 rounded-lg hover:bg-white/[0.04] transition-colors touch-target-reset">
+        <button onClick={logout} className="w-full flex items-center gap-2.5 px-3 py-2.5 rounded-lg hover:bg-white/[0.04] transition-colors touch-target-reset">
           <div className="w-8 h-8 rounded-full bg-gradient-to-br from-accent to-accent-light flex items-center justify-center text-white text-sm font-semibold shadow-lg shadow-accent/20">
-            M
+            {identityInitial}
           </div>
           <div className="flex-1 text-left min-w-0">
-            <p className="text-sm font-medium text-fg truncate">Maximo SEO</p>
-            <p className="text-[11px] text-fg-dim truncate">maximo-seo.ai</p>
+            <p className="text-sm font-medium text-fg truncate">{identityLabel}</p>
+            <p className="text-[11px] text-fg-dim truncate">{user?.email || domain}</p>
           </div>
-          <svg width="12" height="12" viewBox="0 0 12 12" fill="none" className="text-fg-dim shrink-0">
-            <path d="M3 5l3 3 3-3" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
-          </svg>
+          <span className="text-[11px] text-fg-dim shrink-0">Logout</span>
         </button>
       </div>
     </>

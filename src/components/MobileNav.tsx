@@ -10,10 +10,15 @@ const mainItems = [
 ]
 
 const moreItems = [
+  { name: 'Clients', icon: CompetitorsMobileIcon },
   { name: 'Pages', icon: PagesMobileIcon },
-  { name: 'Alerts', icon: AlertsMobileIcon },
-  { name: 'Competitors', icon: CompetitorsMobileIcon },
   { name: 'Content', icon: ContentMobileIcon },
+  { name: 'Competitors', icon: CompetitorsMobileIcon },
+  { name: 'Local SEO', icon: PagesMobileIcon },
+  { name: 'GEO / AI', icon: ContentMobileIcon },
+  { name: 'Alerts', icon: AlertsMobileIcon },
+  { name: 'Tasks', icon: AlertsMobileIcon },
+  { name: 'Reports', icon: PagesMobileIcon },
   { name: 'Settings', icon: SettingsMobileIcon },
 ]
 
@@ -51,7 +56,7 @@ export default function MobileNav({ activeNav, onNavChange }: { activeNav: strin
               transition={{ type: 'spring', damping: 30, stiffness: 300 }}
               className="lg:hidden fixed bottom-[calc(4rem+env(safe-area-inset-bottom,0px))] left-3 right-3 z-50 bg-bg-sidebar border border-border-light rounded-2xl p-2 shadow-2xl"
             >
-              <div className="grid grid-cols-5 gap-1">
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-1 max-h-[55vh] overflow-y-auto">
                 {moreItems.map((item) => {
                   const isActive = activeNav === item.name
                   return (

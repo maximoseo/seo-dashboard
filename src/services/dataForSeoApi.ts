@@ -1,4 +1,6 @@
-// Frontend service for DataForSEO — calls Express backend endpoints
+// Frontend service for DataForSEO — calls backend endpoints
+import { authFetch } from '@/lib/authToken'
+
 const CACHE_TTL_SHORT = 5 * 60 * 1000
 const CACHE_TTL_LONG = 24 * 60 * 60 * 1000
 
@@ -39,7 +41,7 @@ export async function fetchSerpResults(keyword: string, locationCode = 2840): Pr
   if (cached) return cached
 
   try {
-    const res = await fetch('/api/dataforseo/serp', {
+    const res = await authFetch('/api/dataforseo/serp', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ keyword, location_code: locationCode }),
@@ -68,7 +70,7 @@ export async function fetchDomainSummary(target: string): Promise<DfsDomainSumma
   if (cached) return cached
 
   try {
-    const res = await fetch('/api/dataforseo/domain-summary', {
+    const res = await authFetch('/api/dataforseo/domain-summary', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ target }),
@@ -97,7 +99,7 @@ export async function fetchOnPageAudit(target: string): Promise<any> {
   if (cached) return cached
 
   try {
-    const res = await fetch('/api/dataforseo/onpage', {
+    const res = await authFetch('/api/dataforseo/onpage', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ target, max_crawl_pages: 10 }),

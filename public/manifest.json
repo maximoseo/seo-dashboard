@@ -1,0 +1,12 @@
+{
+  "name": "Maximo SEO Dashboard",
+  "short_name": "SEO Dashboard",
+  "description": "Private SEO operations dashboard for Maximo SEO.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0A0F1E",
+  "theme_color": "#0A0F1E",
+  "icons": [
+    { "src": "/favicon.svg", "sizes": "any", "type": "image/svg+xml" }
+  ]
+}

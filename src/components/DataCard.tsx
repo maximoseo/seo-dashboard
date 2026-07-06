@@ -1,3 +1,5 @@
+import DataStateBadge, { type DataState } from '@/components/DataStateBadge'
+
 interface LoadingSkeletonProps {
   lines?: number
   className?: string
@@ -47,9 +49,11 @@ interface DataCardProps {
   onRetry?: () => void
   className?: string
   headerRight?: React.ReactNode
+  dataState?: DataState
+  fetchedAt?: string | null
 }
 
-export function DataCard({ title, children, sources, loading, error, onRetry, className = '', headerRight }: DataCardProps) {
+export function DataCard({ title, children, sources, loading, error, onRetry, className = '', headerRight, dataState, fetchedAt }: DataCardProps) {
   return (
     <div className={`bg-bg-card border border-border rounded-xl p-4 md:p-5 transition-all hover:border-border-light card-glow ${className}`}>
       <div className="flex items-start justify-between gap-2 mb-3 md:mb-4">
@@ -66,6 +70,7 @@ export function DataCard({ title, children, sources, loading, error, onRetry, cl
           )}
         </div>
         {headerRight && <div className="shrink-0">{headerRight}</div>}
+        {dataState && !headerRight && <DataStateBadge state={dataState} fetchedAt={fetchedAt} />}
       </div>
       {loading ? (
         <LoadingSkeleton />

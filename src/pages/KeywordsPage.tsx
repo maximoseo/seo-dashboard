@@ -1,6 +1,8 @@
 import { useState, useMemo } from 'react'
 import { motion } from 'framer-motion'
 import { useKeywords } from '../api/client'
+import { useSEO } from '@/contexts/SEOContext'
+import DataStateBadge from '@/components/DataStateBadge'
 import { normalizeSemrushKeywords, normalizeAhrefsKeywords, normalizeDataForSEOKeywords, formatMetric } from '../api/normalize'
 
 type SortDir = 'asc' | 'desc'
@@ -44,13 +46,14 @@ const serpFeatureLabels: Record<string, string> = {
 }
 
 function MiniSparkline({ data, up }: { data: number[]; up: boolean }) {
-  const max = Math.max(...data)
-  const min = Math.min(...data)
+  const safeData = data.length >= 2 ? data : [0, 0]
+  const max = Math.max(...safeData)
+  const min = Math.min(...safeData)
   const range = max - min || 1
   const h = 20
   const w = 60
-  const points = data.map((v, i) => {
-    const x = (i / (data.length - 1)) * w
+  const points = safeData.map((v, i) => {
+    const x = (i / (safeData.length - 1)) * w
     const y = ((v - min) / range) * (h - 4) + 2
     return `${x},${y}`
   }).join(' ')
@@ -70,9 +73,8 @@ export default function KeywordsPage() {
   const [sortDir, setSortDir] = useState<SortDir>('asc')
   const [page, setPage] = useState(1)
 
-  // Get domain from localStorage (set by dashboard)
-  const domain = localStorage.getItem('maximo:activeDomain') || 'galoz.co.il'
-  const { data: apiData } = useKeywords(domain)
+  const { domain } = useSEO()
+  const { data: apiData, isLoading, error } = useKeywords(domain)
 
   // Normalize API data from multiple sources
   const keywords: Keyword[] = useMemo(() => {
@@ -158,9 +160,9 @@ export default function KeywordsPage() {
       return sortDir === 'asc' ? (av as number) - (bv as number) : (bv as number) - (av as number)
     })
     return data
-  }, [search, posFilter, intentFilter, sortKey, sortDir])
+  }, [search, posFilter, intentFilter, sortKey, sortDir, keywords])
 
-  const totalPages = Math.ceil(filtered.length / ITEMS_PER_PAGE)
+  const totalPages = Math.max(1, Math.ceil(filtered.length / ITEMS_PER_PAGE))
   const paginated = filtered.slice((page - 1) * ITEMS_PER_PAGE, page * ITEMS_PER_PAGE)
 
   const handleSort = (key: SortKey) => {
@@ -189,7 +191,8 @@ export default function KeywordsPage() {
           <h2 className="text-base md:text-lg font-semibold text-fg">Keyword Rankings</h2>
           <p className="text-xs md:text-sm text-fg-muted mt-0.5">Track keyword positions across multiple data sources</p>
         </div>
-        <div className="flex gap-1.5 flex-wrap">
+        <div className="flex gap-1.5 flex-wrap items-center">
+          <DataStateBadge state={error ? 'unavailable' : keywords.length > 0 ? 'live' : isLoading ? 'cached' : 'unavailable'} source={domain} />
           <span className="text-[10px] md:text-xs bg-orange-500/20 text-orange-300 border border-orange-500/30 px-1.5 md:px-2 py-0.5 md:py-1 rounded touch-target-reset">Ahrefs</span>
           <span className="text-[10px] md:text-xs bg-orange-400/20 text-orange-200 border border-orange-400/30 px-1.5 md:px-2 py-0.5 md:py-1 rounded touch-target-reset">SEMrush</span>
           <span className="text-[10px] md:text-xs bg-purple-500/20 text-purple-300 border border-purple-500/30 px-1.5 md:px-2 py-0.5 md:py-1 rounded touch-target-reset">DataForSEO</span>
@@ -377,6 +380,16 @@ export default function KeywordsPage() {
             </tbody>
           </table>
         </div>
+
+        {!isLoading && filtered.length === 0 && (
+          <div className="border-t border-border px-5 py-10 text-center">
+            <p className="text-sm font-medium text-fg">No keyword rows available yet</p>
+            <p className="mt-1 text-xs text-fg-muted">
+              Connect a provider, run a sync, or check Settings. The dashboard no longer shows fake keyword rows as live data.
+            </p>
+            {error && <p className="mt-2 text-xs text-red-300">{error instanceof Error ? error.message : 'Keyword API unavailable'}</p>}
+          </div>
+        )}
 
         {/* Pagination */}
         <div className="flex items-center justify-between px-4 md:px-5 py-3 border-t border-border">

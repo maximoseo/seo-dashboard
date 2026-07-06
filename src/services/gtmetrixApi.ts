@@ -1,4 +1,6 @@
-// Frontend service for GTmetrix — calls Express backend
+// Frontend service for GTmetrix — calls backend
+import { authFetch } from '@/lib/authToken'
+
 const CACHE_TTL = 24 * 60 * 60 * 1000
 
 function getCached<T>(key: string): T | null {
@@ -37,7 +39,7 @@ export async function fetchGtmetrixReport(url: string): Promise<GtmetrixReport |
   if (cached) return cached
 
   try {
-    const res = await fetch('/api/gtmetrix/test', {
+    const res = await authFetch('/api/gtmetrix/test', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ url }),

@@ -1,3 +1,5 @@
+import { authFetch } from '@/lib/authToken'
+
 const API_BASE = '/api/ahrefs'
 const CACHE_TTL = 15 * 60 * 1000 // 15 minutes
 
@@ -81,7 +83,7 @@ async function apiFetch<T>(endpoint: string, params: Record<string, string>): Pr
   const cached = getCached<T>(cacheKey)
   if (cached) return cached
 
-  const res = await fetch(url.toString())
+  const res = await authFetch(url.toString())
   if (!res.ok) throw new Error(`Ahrefs API error: ${res.status} ${res.statusText}`)
   const data = await res.json()
   setCache(cacheKey, data)
@@ -90,21 +92,13 @@ async function apiFetch<T>(endpoint: string, params: Record<string, string>): Pr
 
 // API methods
 export async function fetchDomainRating(target: string, date: string): Promise<DomainRating> {
-  try {
-    const data = await apiFetch<{ domain_rating: DomainRating }>('/domain-rating', { target, date })
-    return data.domain_rating
-  } catch {
-    return { domain_rating: 62, ahrefs_rank: 45230 }
-  }
+  const data = await apiFetch<{ domain_rating: DomainRating }>('/domain-rating', { target, date })
+  return data.domain_rating
 }
 
 export async function fetchSiteMetrics(target: string, date: string): Promise<SiteMetrics> {
-  try {
-    const data = await apiFetch<{ metrics: SiteMetrics }>('/metrics', { target, date, mode: 'subdomains' })
-    return data.metrics
-  } catch {
-    return { org_traffic: 45200, org_keywords: 1247, org_keywords_1_3: 89, org_cost: 1250000, paid_traffic: 3200, paid_keywords: 45 }
-  }
+  const data = await apiFetch<{ metrics: SiteMetrics }>('/metrics', { target, date, mode: 'subdomains' })
+  return data.metrics
 }
 
 export async function fetchOrganicKeywords(target: string, date: string, limit = 20): Promise<OrganicKeyword[]> {
@@ -134,12 +128,8 @@ export async function fetchRefDomains(target: string, limit = 20): Promise<RefDo
 }
 
 export async function fetchBacklinksStats(target: string): Promise<BacklinksStats> {
-  try {
-    const data = await apiFetch<{ stats: BacklinksStats }>('/backlinks-stats', { target, mode: 'subdomains' })
-    return data.stats
-  } catch {
-    return { live: 3891, all_time: 5420, live_refdomains: 847, all_time_refdomains: 1230 }
-  }
+  const data = await apiFetch<{ stats: BacklinksStats }>('/backlinks-stats', { target, mode: 'subdomains' })
+  return data.stats
 }
 
 // Utility: get today's date in YYYY-MM-DD
