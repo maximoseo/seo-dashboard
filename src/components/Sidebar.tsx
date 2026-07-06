@@ -3,6 +3,7 @@ import { motion, AnimatePresence } from 'framer-motion'
 import { useSEO } from '@/contexts/SEOContext'
 import { useAuth } from '@/contexts/AuthContext'
 import { authFetch } from '@/lib/authToken'
+import ProjectSelector from '@/components/project/ProjectSelector'
 
 // Fetch real alert count from the API
 async function fetchAlertCount(domain: string): Promise<number> {
@@ -111,18 +112,7 @@ export default function Sidebar({ activeNav, onNavChange, mobileOpen = false, on
 
       {/* Project Selector */}
       <div className="px-3 mb-3">
-        <button className="w-full flex items-center gap-2.5 px-3 py-2.5 rounded-lg border border-border hover:border-border-light transition-colors text-sm touch-target-reset">
-          <div className="w-8 h-8 rounded-lg bg-accent/15 flex items-center justify-center">
-            <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
-              <circle cx="8" cy="8" r="6" stroke="#60A5FA" strokeWidth="1.5" />
-              <circle cx="8" cy="8" r="2" fill="#60A5FA" />
-            </svg>
-          </div>
-          <span className="text-fg-muted truncate flex-1 text-left text-[13px]">{domain}</span>
-          <svg width="12" height="12" viewBox="0 0 12 12" fill="none" className="text-fg-dim shrink-0">
-            <path d="M3 5l3 3 3-3" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
-          </svg>
-        </button>
+        <ProjectSelector onSelected={onMobileClose} />
       </div>
 
       {/* Plan Info */}

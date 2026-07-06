@@ -1,5 +1,9 @@
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import { motion } from 'framer-motion'
+import { useNavigate } from 'react-router-dom'
+import DataStateBadge from '@/components/DataStateBadge'
+import { useProject } from '@/contexts/ProjectContext'
+import { buildProjectPath } from '@/lib/projectRoutes'
 
 interface TopBarProps {
   title?: string
@@ -7,24 +11,35 @@ interface TopBarProps {
   onMenuClick?: () => void
 }
 
+function formatDate(date: Date): string {
+  return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+}
+
+function rangeLabel(days: number): string {
+  const end = new Date()
+  const start = new Date()
+  start.setDate(end.getDate() - days)
+  return `${formatDate(start)} – ${formatDate(end)}`
+}
+
 export default function TopBar({ title = 'Dashboard', subtitle = "Overview of your site's SEO performance", onMenuClick }: TopBarProps) {
   const [showDatePicker, setShowDatePicker] = useState(false)
   const [selectedRange, setSelectedRange] = useState('6M')
+  const navigate = useNavigate()
+  const { activeProject, activeDomain } = useProject()
 
   const ranges = [
-    { label: '7D', value: '7D' },
-    { label: '30D', value: '30D' },
-    { label: '3M', value: '3M' },
-    { label: '6M', value: '6M' },
-    { label: '1Y', value: '1Y' },
+    { label: '7D', value: '7D', days: 7 },
+    { label: '30D', value: '30D', days: 30 },
+    { label: '3M', value: '3M', days: 90 },
+    { label: '6M', value: '6M', days: 180 },
+    { label: '1Y', value: '1Y', days: 365 },
   ]
 
-  const dateLabels: Record<string, string> = {
-    '7D': 'Oct 24 – Oct 31, 2024',
-    '30D': 'Oct 1 – Oct 31, 2024',
-    '3M': 'Aug 1 – Oct 31, 2024',
-    '6M': 'May 1 – Oct 31, 2024',
-    '1Y': 'Nov 1, 2023 – Oct 31, 2024',
+  const dateLabels = useMemo(() => Object.fromEntries(ranges.map(range => [range.value, rangeLabel(range.days)])), [])
+
+  const openReports = () => {
+    navigate(activeDomain ? buildProjectPath(activeDomain, 'reports') : '/reports')
   }
 
   return (
@@ -34,11 +49,9 @@ export default function TopBar({ title = 'Dashboard', subtitle = "Overview of yo
       transition={{ duration: 0.3 }}
       className="sticky top-0 z-20 glass-header border-b border-border px-4 md:px-6 lg:px-8 py-3.5 lg:py-4 relative"
     >
-      {/* Bottom gradient line */}
       <div className="absolute bottom-0 left-0 right-0 h-[1px] bg-gradient-to-r from-transparent via-accent/30 to-transparent" />
       <div className="flex items-center justify-between gap-3">
         <div className="flex items-center gap-3 min-w-0">
-          {/* Mobile hamburger */}
           <button
             onClick={onMenuClick}
             className="lg:hidden flex items-center justify-center w-10 h-10 -ml-1 rounded-xl text-fg-muted hover:text-fg hover:bg-white/[0.06] transition-colors touch-target-reset"
@@ -49,13 +62,20 @@ export default function TopBar({ title = 'Dashboard', subtitle = "Overview of yo
           </button>
 
           <div className="min-w-0">
-            <h1 className="text-lg md:text-xl lg:text-2xl font-bold text-fg truncate">{title}</h1>
+            <div className="flex flex-wrap items-center gap-2">
+              <h1 className="text-lg md:text-xl lg:text-2xl font-bold text-fg truncate">{title}</h1>
+              {activeProject && <DataStateBadge state={activeProject.dataState} fetchedAt={activeProject.lastFetchedAt} className="hidden md:inline-flex" />}
+            </div>
             <p className="text-xs md:text-sm text-fg-muted mt-0.5 truncate hidden sm:block">{subtitle}</p>
+            {activeProject && (
+              <p className="mt-1 hidden text-[11px] text-fg-dim md:block">
+                Project: <span className="text-fg-muted">{activeProject.clientName}</span> / {activeProject.domain} • {activeProject.status} • {activeProject.connectedSources.length} sources
+              </p>
+            )}
           </div>
         </div>
 
         <div className="flex items-center gap-2 shrink-0">
-          {/* Date picker */}
           <div className="relative">
             <button
               onClick={() => setShowDatePicker(!showDatePicker)}
@@ -104,13 +124,12 @@ export default function TopBar({ title = 'Dashboard', subtitle = "Overview of yo
             )}
           </div>
 
-          {/* Export button */}
-          <button className="flex items-center gap-1.5 px-2.5 md:px-3 py-2 rounded-lg border border-border hover:border-border-light bg-bg-card text-xs md:text-sm text-fg-muted hover:text-fg transition-colors touch-target-reset">
+          <button onClick={openReports} className="flex items-center gap-1.5 px-2.5 md:px-3 py-2 rounded-lg border border-border hover:border-border-light bg-bg-card text-xs md:text-sm text-fg-muted hover:text-fg transition-colors touch-target-reset">
             <svg width="14" height="14" viewBox="0 0 14 14" fill="none" className="shrink-0">
               <path d="M7 2v7M4 6l3 3 3-3" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
               <path d="M2 10v1.5a1 1 0 001 1h8a1 1 0 001-1V10" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
             </svg>
-            <span className="hidden sm:inline">Export</span>
+            <span className="hidden sm:inline">Report</span>
           </button>
         </div>
       </div>

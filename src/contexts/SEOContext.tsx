@@ -1,5 +1,6 @@
 import { createContext, useContext, useEffect, useState, useCallback, type ReactNode } from 'react'
 import { fetchOverview, fetchApiHealth, type OverviewData, type ApiHealthStatus } from '@/services/seoApi'
+import { useProject } from '@/contexts/ProjectContext'
 
 interface SEOContextData {
   domain: string
@@ -30,22 +31,8 @@ export function useSEO() {
 }
 
 export function SEOProvider({ children }: { children: ReactNode }) {
-  // Persist domain to localStorage + URL param
-  const getInitialDomain = () => {
-    // Check URL first
-    const url = new URL(window.location.href)
-    const urlDomain = url.searchParams.get('domain')
-    if (urlDomain) return urlDomain
-    
-    // Then localStorage
-    const stored = localStorage.getItem('maximo:activeDomain')
-    if (stored) return stored
-    
-    // Default
-    return 'maximo-seo.ai'
-  }
-  
-  const [domain, setDomainState] = useState(getInitialDomain)
+  const { activeDomain, setActiveProject } = useProject()
+  const domain = activeDomain || 'maximo-seo.ai'
   const [overview, setOverview] = useState<OverviewData | null>(null)
   const [overviewLoading, setOverviewLoading] = useState(false)
   const [overviewError, setOverviewError] = useState<string | null>(null)
@@ -81,20 +68,9 @@ export function SEOProvider({ children }: { children: ReactNode }) {
     loadOverview()
   }, [loadOverview])
 
-  // setDomain wrapper: persists to localStorage + updates URL
   const setDomain = useCallback((d: string) => {
-    setDomainState(d)
-    localStorage.setItem('maximo:activeDomain', d)
-    // Update URL without full reload
-    const url = new URL(window.location.href)
-    url.searchParams.set('domain', d)
-    window.history.replaceState({}, '', url)
-  }, [])
-
-  // Sync localStorage when domain changes via other means
-  useEffect(() => {
-    localStorage.setItem('maximo:activeDomain', domain)
-  }, [domain])
+    setActiveProject(d, { preserveModule: true })
+  }, [setActiveProject])
 
   return (
     <SEOContext.Provider value={{

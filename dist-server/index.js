@@ -11,6 +11,7 @@ import { createClient } from '@supabase/supabase-js';
 import { generateAlerts } from './alerts/rules.js';
 import { createSeoTaskFromAlert } from './tasks/createSeoTask.js';
 import { renderReportMarkdown } from './reports/renderReport.js';
+import { buildProjectSummaries, getProjectByDomain, summarizeProjectModules, } from './projects/projectSummary.js';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
 app.set('trust proxy', 1);
@@ -1147,12 +1148,116 @@ app.get('/api/alerts/aggregated', expensiveLimiter, async (req, res) => {
     ].filter(Boolean);
     res.json({ alerts: [...ruleAlerts, ...alerts], activeSources });
 });
-const demoClients = [
-    { id: 'maximo', name: 'Maximo SEO', domain: 'maximo-seo.ai', market: 'Israel / Global', status: 'active', priority: 'Primary' },
-    { id: 'galoz', name: 'Galoz', domain: 'galoz.co.il', market: 'Israel', status: 'ready', priority: 'Client' },
+const seedProjects = [
+    { id: 'maximo', clientId: 'client-maximo', clientName: 'Maximo SEO', name: 'Maximo SEO', domain: 'maximo-seo.ai', market: 'Israel / Global', status: 'active', priority: 'primary' },
+    { id: 'galoz', clientId: 'client-galoz', clientName: 'Galoz', name: 'Galoz', domain: 'galoz.co.il', market: 'Israel', status: 'ready', priority: 'high' },
 ];
-app.get('/api/clients', (_req, res) => {
-    res.json({ clients: demoClients, source: supabase ? 'supabase-ready' : 'local-seed', fetchedAt: new Date().toISOString() });
+function normalizeProjectStatus(value) {
+    const status = String(value || '').toLowerCase();
+    return ['active', 'ready', 'planned', 'paused', 'archived'].includes(status) ? status : 'active';
+}
+function normalizeProjectPriority(value) {
+    const priority = String(value || '').toLowerCase();
+    return ['primary', 'high', 'medium', 'low'].includes(priority) ? priority : 'medium';
+}
+async function loadProjectList() {
+    if (supabase) {
+        try {
+            const { data, error } = await supabase
+                .from('seo_domains')
+                .select('id, client_id, domain, market, name, status, priority, seo_clients(id, name)')
+                .order('created_at', { ascending: true });
+            if (error) {
+                console.error('[projects] Supabase project load failed, falling back to local seed:', {
+                    code: error.code,
+                    message: error.message,
+                    details: error.details,
+                    hint: error.hint,
+                });
+            }
+            if (!error && Array.isArray(data) && data.length > 0) {
+                const mapped = data.map((row) => {
+                    const client = Array.isArray(row.seo_clients) ? row.seo_clients[0] : row.seo_clients;
+                    const clientName = client?.name || row.name || row.domain;
+                    return {
+                        id: String(row.id || row.domain),
+                        clientId: String(row.client_id || client?.id || row.id || row.domain),
+                        clientName,
+                        name: row.name || clientName,
+                        domain: row.domain,
+                        market: row.market || 'Unassigned market',
+                        status: normalizeProjectStatus(row.status),
+                        priority: normalizeProjectPriority(row.priority),
+                    };
+                }).filter(project => project.domain);
+                if (mapped.length > 0) {
+                    const projects = buildProjectSummaries(mapped, 'supabase');
+                    return { projects, source: 'supabase', fetchedAt: new Date().toISOString() };
+                }
+            }
+        }
+        catch (err) {
+            console.error('[projects] Supabase project load threw, falling back to local seed:', err);
+        }
+    }
+    const projects = buildProjectSummaries(seedProjects, 'local-seed');
+    return { projects, source: 'local-seed', fetchedAt: new Date().toISOString() };
+}
+app.get('/api/projects', async (_req, res) => {
+    const result = await loadProjectList();
+    res.json(result);
+});
+app.get('/api/projects/:domain', async (req, res) => {
+    const result = await loadProjectList();
+    const project = getProjectByDomain(result.projects, decodeURIComponent(req.params.domain));
+    if (!project)
+        return res.status(404).json({ error: 'Project not found', domain: req.params.domain });
+    res.json({ project, source: result.source, fetchedAt: result.fetchedAt });
+});
+app.get('/api/projects/:domain/summary', async (req, res) => {
+    const result = await loadProjectList();
+    const project = getProjectByDomain(result.projects, decodeURIComponent(req.params.domain));
+    if (!project)
+        return res.status(404).json({ error: 'Project not found', domain: req.params.domain });
+    res.json({
+        domain: project.domain,
+        project,
+        healthScore: project.healthScore,
+        alertCount: project.alertCount,
+        taskCount: project.taskCount,
+        connectedSources: project.connectedSources,
+        modules: project.modules,
+        source: result.source,
+        fetchedAt: result.fetchedAt,
+    });
+});
+app.get('/api/projects/:domain/modules', async (req, res) => {
+    const result = await loadProjectList();
+    const project = getProjectByDomain(result.projects, decodeURIComponent(req.params.domain));
+    if (!project)
+        return res.status(404).json({ error: 'Project not found', domain: req.params.domain });
+    res.json({ ...summarizeProjectModules(project), source: result.source });
+});
+app.get('/api/clients', async (_req, res) => {
+    const result = await loadProjectList();
+    res.json({
+        clients: result.projects.map(project => ({
+            id: project.id,
+            name: project.name,
+            domain: project.domain,
+            market: project.market,
+            status: project.status,
+            priority: project.priority,
+            clientName: project.clientName,
+            healthScore: project.healthScore,
+            alertCount: project.alertCount,
+            taskCount: project.taskCount,
+            dataState: project.dataState,
+            lastFetchedAt: project.lastFetchedAt,
+        })),
+        source: result.source,
+        fetchedAt: result.fetchedAt,
+    });
 });
 app.get('/api/tasks', (req, res) => {
     const { domain = 'maximo-seo.ai' } = req.query;

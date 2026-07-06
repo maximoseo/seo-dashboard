@@ -7,10 +7,16 @@ import ErrorBoundary from '@/components/ErrorBoundary'
 import LoginPage from '@/pages/LoginPage'
 import { AhrefsProvider } from '@/contexts/AhrefsContext'
 import { SEOProvider } from '@/contexts/SEOContext'
+import { ProjectProvider, useProject } from '@/contexts/ProjectContext'
 import { useAuth } from '@/contexts/AuthContext'
+import { buildProjectPath, getModuleFromPathname, legacyRouteToProjectModule, type ProjectModule } from '@/lib/projectRoutes'
 
 const DashboardPage = lazy(() => import('@/pages/DashboardPage'))
 const ClientsPage = lazy(() => import('@/pages/ClientsPage'))
+const ProjectsIndexPage = lazy(() => import('@/pages/ProjectsIndexPage'))
+const ProjectWorkspacePage = lazy(() => import('@/pages/project/ProjectWorkspacePage'))
+const ProjectOverviewPage = lazy(() => import('@/pages/project/ProjectOverviewPage'))
+const ProjectSettingsPage = lazy(() => import('@/pages/project/ProjectSettingsPage'))
 const KeywordsPage = lazy(() => import('@/pages/KeywordsPage'))
 const BacklinksPage = lazy(() => import('@/pages/BacklinksPage'))
 const PagesPage = lazy(() => import('@/pages/PagesPage'))
@@ -42,12 +48,28 @@ const navRouteMap: Record<string, string> = {
 }
 
 const routeNavMap: Record<string, string> = Object.fromEntries(
-  Object.entries(navRouteMap).map(([k, v]) => [v, k])
+  Object.entries(navRouteMap).map(([k, v]) => [v, k]),
 )
+
+const moduleNavMap: Record<ProjectModule, string> = {
+  keywords: 'Keywords',
+  backlinks: 'Backlinks',
+  pages: 'Pages',
+  vitals: 'Vitals',
+  alerts: 'Alerts',
+  competitors: 'Competitors',
+  content: 'Content',
+  'local-seo': 'Local SEO',
+  'geo-ai': 'GEO / AI',
+  tasks: 'Tasks',
+  reports: 'Reports',
+  settings: 'Settings',
+}
 
 const pageTitles: Record<string, { title: string; subtitle: string }> = {
   '/': { title: 'Dashboard', subtitle: "Overview of your site's SEO performance" },
   '/clients': { title: 'Clients / Domains', subtitle: 'Portfolio domain selector and monitoring status' },
+  '/projects': { title: 'Projects / Sites', subtitle: 'Choose a site and open its full SEO workspace' },
   '/keywords': { title: 'Keywords', subtitle: 'Track organic keyword rankings and opportunities' },
   '/backlinks': { title: 'Backlinks', subtitle: 'Analyze authority, risk, anchors and lost links' },
   '/pages': { title: 'Pages', subtitle: 'Technical SEO crawl inventory and page priorities' },
@@ -75,68 +97,132 @@ function LoadingScreen() {
   )
 }
 
-function DashboardShell() {
+function getActiveNav(pathname: string): string {
+  if (pathname === '/projects' || pathname === '/clients') return 'Clients'
+  if (pathname.startsWith('/projects/')) {
+    const module = getModuleFromPathname(pathname)
+    return module ? moduleNavMap[module] : 'Dashboard'
+  }
+  return routeNavMap[pathname] || 'Dashboard'
+}
+
+function DashboardShellInner() {
   const navigate = useNavigate()
   const location = useLocation()
+  const { activeDomain, activeProject } = useProject()
   const [sidebarOpen, setSidebarOpen] = useState(false)
-  const activeNav = routeNavMap[location.pathname] || 'Dashboard'
-  const pageInfo = pageTitles[location.pathname] || pageTitles['/']
+  const activeNav = getActiveNav(location.pathname)
+
+  const projectModule = getModuleFromPathname(location.pathname)
+  const legacyModule = legacyRouteToProjectModule(location.pathname)
+  const module = projectModule || legacyModule
+  const pageInfo = location.pathname === '/projects'
+    ? pageTitles['/projects']
+    : location.pathname.startsWith('/projects/')
+      ? module
+        ? { ...pageTitles[`/${module}`], title: pageTitles[`/${module}`].title, subtitle: `${activeProject?.name || activeDomain} • ${activeDomain}` }
+        : { title: activeProject?.name || 'Project Workspace', subtitle: `${activeDomain} workspace overview and next actions` }
+      : pageTitles[location.pathname] || pageTitles['/']
 
   const handleNavChange = (name: string) => {
     const route = navRouteMap[name]
-    if (route) {
-      navigate(route)
+    if (!route) return
+
+    if (name === 'Clients') {
+      navigate('/projects')
       setSidebarOpen(false)
+      return
     }
+
+    if (activeDomain) {
+      if (name === 'Dashboard') {
+        navigate(buildProjectPath(activeDomain))
+        setSidebarOpen(false)
+        return
+      }
+      const moduleRoute = legacyRouteToProjectModule(route)
+      if (moduleRoute) {
+        navigate(buildProjectPath(activeDomain, moduleRoute))
+        setSidebarOpen(false)
+        return
+      }
+    }
+
+    navigate(route)
+    setSidebarOpen(false)
   }
 
   return (
-    <SEOProvider>
-      <AhrefsProvider>
-        <div className="flex min-h-screen bg-bg-darkest">
-          <Sidebar
-            activeNav={activeNav}
-            onNavChange={handleNavChange}
-            mobileOpen={sidebarOpen}
-            onMobileClose={() => setSidebarOpen(false)}
-          />
+    <div className="flex min-h-screen bg-bg-darkest">
+      <Sidebar
+        activeNav={activeNav}
+        onNavChange={handleNavChange}
+        mobileOpen={sidebarOpen}
+        onMobileClose={() => setSidebarOpen(false)}
+      />
 
-          <main className="flex-1 lg:ml-[232px] pb-24 lg:pb-0">
-            <TopBar
-              title={pageInfo.title}
-              subtitle={pageInfo.subtitle}
-              onMenuClick={() => setSidebarOpen(true)}
-            />
+      <main className="flex-1 lg:ml-[232px] pb-24 lg:pb-0">
+        <TopBar
+          title={pageInfo.title}
+          subtitle={pageInfo.subtitle}
+          onMenuClick={() => setSidebarOpen(true)}
+        />
 
-            <div className="px-4 md:px-6 lg:px-8 py-5 lg:py-6">
-              <ErrorBoundary key={location.pathname}>
-                <Suspense fallback={<div className="rounded-xl border border-border bg-bg-card p-6 text-sm text-fg-muted">Loading module…</div>}>
-                  <Routes>
-                    <Route path="/" element={<DashboardPage />} />
-                    <Route path="/clients" element={<ClientsPage />} />
-                    <Route path="/keywords" element={<KeywordsPage />} />
-                    <Route path="/backlinks" element={<BacklinksPage />} />
-                    <Route path="/pages" element={<PagesPage />} />
-                    <Route path="/vitals" element={<VitalsPage />} />
-                    <Route path="/alerts" element={<AlertsPage />} />
-                    <Route path="/competitors" element={<CompetitorsPage />} />
-                    <Route path="/content" element={<ContentPage />} />
-                    <Route path="/local-seo" element={<LocalSEOPage />} />
-                    <Route path="/geo-ai" element={<GeoAIPage />} />
-                    <Route path="/tasks" element={<TasksPage />} />
-                    <Route path="/reports" element={<ReportsPage />} />
-                    <Route path="/settings" element={<SettingsPage />} />
-                    <Route path="*" element={<Navigate to="/" replace />} />
-                  </Routes>
-                </Suspense>
-              </ErrorBoundary>
-            </div>
-          </main>
-
-          <MobileNav activeNav={activeNav} onNavChange={handleNavChange} />
+        <div className="px-4 md:px-6 lg:px-8 py-5 lg:py-6">
+          <ErrorBoundary key={location.pathname}>
+            <Suspense fallback={<div className="rounded-xl border border-border bg-bg-card p-6 text-sm text-fg-muted">Loading module…</div>}>
+              <Routes>
+                <Route path="/" element={<DashboardPage />} />
+                <Route path="/clients" element={<ClientsPage />} />
+                <Route path="/projects" element={<ProjectsIndexPage />} />
+                <Route path="/projects/:domain" element={<ProjectWorkspacePage />}>
+                  <Route index element={<ProjectOverviewPage />} />
+                  <Route path="keywords" element={<KeywordsPage />} />
+                  <Route path="backlinks" element={<BacklinksPage />} />
+                  <Route path="pages" element={<PagesPage />} />
+                  <Route path="vitals" element={<VitalsPage />} />
+                  <Route path="alerts" element={<AlertsPage />} />
+                  <Route path="competitors" element={<CompetitorsPage />} />
+                  <Route path="content" element={<ContentPage />} />
+                  <Route path="local-seo" element={<LocalSEOPage />} />
+                  <Route path="geo-ai" element={<GeoAIPage />} />
+                  <Route path="tasks" element={<TasksPage />} />
+                  <Route path="reports" element={<ReportsPage />} />
+                  <Route path="settings" element={<ProjectSettingsPage />} />
+                </Route>
+                <Route path="/keywords" element={<KeywordsPage />} />
+                <Route path="/backlinks" element={<BacklinksPage />} />
+                <Route path="/pages" element={<PagesPage />} />
+                <Route path="/vitals" element={<VitalsPage />} />
+                <Route path="/alerts" element={<AlertsPage />} />
+                <Route path="/competitors" element={<CompetitorsPage />} />
+                <Route path="/content" element={<ContentPage />} />
+                <Route path="/local-seo" element={<LocalSEOPage />} />
+                <Route path="/geo-ai" element={<GeoAIPage />} />
+                <Route path="/tasks" element={<TasksPage />} />
+                <Route path="/reports" element={<ReportsPage />} />
+                <Route path="/settings" element={<SettingsPage />} />
+                <Route path="*" element={<Navigate to="/projects" replace />} />
+              </Routes>
+            </Suspense>
+          </ErrorBoundary>
         </div>
-      </AhrefsProvider>
-    </SEOProvider>
+      </main>
+
+      <MobileNav activeNav={activeNav} onNavChange={handleNavChange} />
+    </div>
+  )
+}
+
+function DashboardShell() {
+  return (
+    <ProjectProvider>
+      <SEOProvider>
+        <AhrefsProvider>
+          <DashboardShellInner />
+        </AhrefsProvider>
+      </SEOProvider>
+    </ProjectProvider>
   )
 }
 
