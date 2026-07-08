@@ -190,10 +190,39 @@ select {
   -webkit-overflow-scrolling: touch;
   scrollbar-width: none;
   overscroll-behavior-x: contain;
+  position: relative;
 }
 
 .table-scroll::-webkit-scrollbar {
   display: none;
+}
+
+/* Fade overlay hint for horizontally scrollable tables */
+.table-scroll-wrapper {
+  position: relative;
+}
+
+.table-scroll-wrapper::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: 40px;
+  background: linear-gradient(to right, transparent, var(--color-bg-card));
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.2s;
+}
+
+.table-scroll-wrapper.has-overflow::after {
+  opacity: 1;
+}
+
+@media (min-width: 768px) {
+  .table-scroll-wrapper::after {
+    display: none;
+  }
 }
 
 /* Smooth momentum scrolling on mobile */
