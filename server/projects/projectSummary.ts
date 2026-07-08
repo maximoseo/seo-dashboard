@@ -11,6 +11,7 @@ export type SeedProject = {
   market: string
   status: ProjectStatus
   priority: ProjectPriority
+  screenshotUrl?: string
 }
 
 export type ProjectModuleSlug =
@@ -44,6 +45,7 @@ export type ProjectSummary = SeedProject & {
   connectedSources: string[]
   lastFetchedAt: string
   modules: ProjectModuleSummary[]
+  screenshotUrl?: string
 }
 
 const moduleDefinitions: Array<Omit<ProjectModuleSummary, 'href'>> = [
