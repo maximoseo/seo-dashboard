@@ -1229,6 +1229,58 @@ app.get('/api/projects', async (_req, res) => {
   res.json(result)
 })
 
+app.post('/api/projects', async (req, res) => {
+  const { name, domain, clientName, market, status, priority } = req.body
+  if (!name || !domain) return res.status(400).json({ error: 'name and domain are required' })
+
+  const cleanDomain = domain.replace(/^https?:\/\//, '').replace(/\/$/, '')
+
+  if (supabase) {
+    try {
+      // Get or create client
+      let clientId: string
+      const { data: existingClient } = await supabase
+        .from('seo_clients')
+        .select('id')
+        .eq('name', clientName || name)
+        .single()
+
+      if (existingClient) {
+        clientId = existingClient.id
+      } else {
+        const { data: newClient, error: clientErr } = await supabase
+          .from('seo_clients')
+          .insert({ name: clientName || name })
+          .select('id')
+          .single()
+        if (clientErr) return res.status(500).json({ error: 'Failed to create client', details: clientErr.message })
+        clientId = newClient.id
+      }
+
+      // Create domain
+      const { data: newDomain, error: domainErr } = await supabase
+        .from('seo_domains')
+        .insert({
+          client_id: clientId,
+          domain: cleanDomain,
+          name,
+          market: market || 'Global',
+          status: status || 'active',
+          priority: priority || 'medium',
+        })
+        .select()
+        .single()
+
+      if (domainErr) return res.status(500).json({ error: 'Failed to create project', details: domainErr.message })
+      return res.status(201).json({ project: newDomain, message: 'Project created' })
+    } catch (err: any) {
+      return res.status(500).json({ error: 'Database error', details: err.message })
+    }
+  }
+
+  res.status(503).json({ error: 'Database not configured' })
+})
+
 app.get('/api/projects/:domain', async (req, res) => {
   const result = await loadProjectList()
   const project = getProjectByDomain(result.projects, decodeURIComponent(req.params.domain))

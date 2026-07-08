@@ -1,16 +1,93 @@
 import { useMemo, useState } from 'react'
+import { motion, AnimatePresence } from 'framer-motion'
 import DataStateBadge from '@/components/DataStateBadge'
 import ProjectStatusBadge from '@/components/project/ProjectStatusBadge'
 import { DataCard } from '@/components/DataCard'
 import { useProject } from '@/contexts/ProjectContext'
+import { authFetch } from '@/lib/authToken'
 import type { ProjectStatus } from '@/types/project'
 
 const filters: Array<ProjectStatus | 'all'> = ['all', 'active', 'ready', 'planned', 'paused']
+
+interface NewProjectForm {
+  name: string
+  domain: string
+  clientName: string
+  market: string
+}
+
+function CreateProjectModal({ open, onClose, onCreated }: { open: boolean; onClose: () => void; onCreated: () => void }) {
+  const [form, setForm] = useState<NewProjectForm>({ name: '', domain: '', clientName: '', market: '' })
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!form.name || !form.domain) return
+    setSaving(true)
+    setError(null)
+    try {
+      const res = await authFetch('/api/projects', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(form),
+      })
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}))
+        throw new Error(data.error || `Failed: ${res.status}`)
+      }
+      setForm({ name: '', domain: '', clientName: '', market: '' })
+      onCreated()
+      onClose()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to create project')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  if (!open) return null
+
+  return (
+    <AnimatePresence>
+      <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 z-50 flex items-center justify-center p-4 backdrop-overlay" onClick={onClose}>
+        <motion.div initial={{ scale: 0.95, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.95, opacity: 0 }} className="w-full max-w-md bg-bg-card border border-border rounded-2xl shadow-2xl p-6" onClick={e => e.stopPropagation()}>
+          <h3 className="text-lg font-bold text-fg">New Project</h3>
+          <p className="text-xs text-fg-muted mt-1">Add a new site to your SEO portfolio</p>
+          <form onSubmit={handleSubmit} className="mt-5 space-y-3">
+            <div>
+              <label className="text-[11px] text-fg-dim mb-1 block">Project Name *</label>
+              <input value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} placeholder="My Website" required className="w-full bg-bg-darkest border border-border rounded-lg px-3 py-2.5 text-sm text-fg placeholder:text-fg-dim focus:outline-none focus:border-accent" />
+            </div>
+            <div>
+              <label className="text-[11px] text-fg-dim mb-1 block">Domain *</label>
+              <input value={form.domain} onChange={e => setForm(f => ({ ...f, domain: e.target.value }))} placeholder="example.com" required className="w-full bg-bg-darkest border border-border rounded-lg px-3 py-2.5 text-sm text-fg placeholder:text-fg-dim focus:outline-none focus:border-accent" />
+            </div>
+            <div>
+              <label className="text-[11px] text-fg-dim mb-1 block">Client Name</label>
+              <input value={form.clientName} onChange={e => setForm(f => ({ ...f, clientName: e.target.value }))} placeholder="Client or company name" className="w-full bg-bg-darkest border border-border rounded-lg px-3 py-2.5 text-sm text-fg placeholder:text-fg-dim focus:outline-none focus:border-accent" />
+            </div>
+            <div>
+              <label className="text-[11px] text-fg-dim mb-1 block">Market</label>
+              <input value={form.market} onChange={e => setForm(f => ({ ...f, market: e.target.value }))} placeholder="US, IL, Global" className="w-full bg-bg-darkest border border-border rounded-lg px-3 py-2.5 text-sm text-fg placeholder:text-fg-dim focus:outline-none focus:border-accent" />
+            </div>
+            {error && <p className="text-xs text-red-300 bg-red-500/10 border border-red-500/20 rounded-lg px-3 py-2">{error}</p>}
+            <div className="flex gap-2 pt-2">
+              <button type="button" onClick={onClose} className="flex-1 py-2.5 rounded-lg border border-border text-sm text-fg-muted hover:text-fg transition-colors">Cancel</button>
+              <button type="submit" disabled={saving || !form.name || !form.domain} className="flex-1 py-2.5 rounded-lg bg-accent text-white text-sm font-medium disabled:opacity-40 hover:bg-accent-light transition-colors">{saving ? 'Creating…' : 'Create Project'}</button>
+            </div>
+          </form>
+        </motion.div>
+      </motion.div>
+    </AnimatePresence>
+  )
+}
 
 export default function ProjectsIndexPage() {
   const { projects, loading, error, setActiveProject, source, fetchedAt, refreshProjects } = useProject()
   const [query, setQuery] = useState('')
   const [status, setStatus] = useState<ProjectStatus | 'all'>('all')
+  const [showCreate, setShowCreate] = useState(false)
 
   const filtered = useMemo(() => {
     const needle = query.trim().toLowerCase()
@@ -33,6 +110,7 @@ export default function ProjectsIndexPage() {
         <div className="flex flex-wrap gap-2">
           <DataStateBadge state={dataState} source={source || undefined} fetchedAt={fetchedAt} />
           <button onClick={refreshProjects} className="rounded-lg border border-border px-3 py-1.5 text-xs text-fg-muted hover:border-border-light hover:text-fg">Refresh</button>
+          <button onClick={() => setShowCreate(true)} className="rounded-lg border border-accent/30 bg-accent/10 px-3 py-1.5 text-xs font-medium text-accent-light hover:border-accent/50">+ New Project</button>
         </div>
       </div>
 
@@ -87,6 +165,7 @@ export default function ProjectsIndexPage() {
           ))}
         </div>
       </DataCard>
+      <CreateProjectModal open={showCreate} onClose={() => setShowCreate(false)} onCreated={refreshProjects} />
     </div>
   )
 }

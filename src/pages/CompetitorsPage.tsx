@@ -1,275 +1,232 @@
-import { useState, useEffect } from 'react'
+import { useState, useMemo } from 'react'
 import { motion } from 'framer-motion'
-import { useSEO } from '@/contexts/SEOContext'
+import { useQuery } from '@tanstack/react-query'
 import { DataCard } from '@/components/DataCard'
-import { fetchSemrushCompetitors, fetchExaSearch, fetchAggregatedCompetitors, type AggregatedCompetitors } from '@/services/seoApi'
-import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Legend } from 'recharts'
+import DataStateBadge from '@/components/DataStateBadge'
+import { useSEO } from '@/contexts/SEOContext'
+import { authFetch } from '@/lib/authToken'
 
 interface Competitor {
-  Dn?: string
-  Or?: string
-  Ot?: string
-  Cr?: string
-  Np?: string
+  domain: string
+  commonKeywords: number
+  traffic: number
+  trafficValue: number
+  topCountry: string
+  relevance: number
+  source: string
+}
+
+async function fetchCompetitors(domain: string) {
+  const res = await authFetch(`/api/competitors/aggregated?domain=${encodeURIComponent(domain)}`)
+  if (!res.ok) throw new Error(`Competitors API failed: ${res.status}`)
+  return res.json()
+}
+
+function normalizeCompetitors(data: any): Competitor[] {
+  const competitors: Competitor[] = []
+
+  // DataForSEO format
+  if (data?.sources?.dataforseo?.tasks?.[0]?.result?.[0]?.items) {
+    const items = data.sources.dataforseo.tasks[0].result[0].items
+    items.forEach((item: any) => {
+      competitors.push({
+        domain: item.domain || '',
+        commonKeywords: item.full_domain_metrics?.organic?.count || item.intersections || 0,
+        traffic: item.full_domain_metrics?.organic?.etv || 0,
+        trafficValue: item.full_domain_metrics?.organic?.est_paid_traffic_cost || 0,
+        topCountry: item.full_domain_metrics?.organic?.top_country || 'US',
+        relevance: item.avg_position || 0,
+        source: 'DataForSEO',
+      })
+    })
+  }
+
+  // SEMrush CSV format
+  if (data?.sources?.semrush && Array.isArray(data.sources.semrush)) {
+    data.sources.semrush.forEach((row: string[]) => {
+      if (row.length >= 4) {
+        const existing = competitors.find(c => c.domain === row[0])
+        if (!existing) {
+          competitors.push({
+            domain: row[0] || '',
+            commonKeywords: parseInt(row[2]) || 0,
+            traffic: parseInt(row[3]) || 0,
+            trafficValue: 0,
+            topCountry: 'US',
+            relevance: parseInt(row[1]) || 0,
+            source: 'SEMrush',
+          })
+        }
+      }
+    })
+  }
+
+  // Exa similar sites
+  if (data?.sources?.exa && Array.isArray(data.sources.exa)) {
+    data.sources.exa.forEach((item: any) => {
+      const domain = item.url ? new URL(item.url).hostname : ''
+      const existing = competitors.find(c => c.domain === domain)
+      if (!existing && domain) {
+        competitors.push({
+          domain,
+          commonKeywords: 0,
+          traffic: 0,
+          trafficValue: 0,
+          topCountry: '',
+          relevance: item.score || 0,
+          source: 'Exa',
+        })
+      }
+    })
+  }
+
+  return competitors
 }
 
 export default function CompetitorsPage() {
   const { domain } = useSEO()
-  const [competitors, setCompetitors] = useState<Competitor[]>([])
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState<string | null>(null)
-  const [aggregated, setAggregated] = useState<AggregatedCompetitors | null>(null)
-  const [exaSimilar, setExaSimilar] = useState<any[]>([])
-  const [exaLoading, setExaLoading] = useState(false)
-  const [gapDomain, setGapDomain] = useState('')
+  const { data, isLoading, error, refetch } = useQuery({
+    queryKey: ['competitors', domain],
+    queryFn: () => fetchCompetitors(domain),
+    staleTime: 10 * 60 * 1000,
+    retry: 1,
+  })
 
-  useEffect(() => {
-    setLoading(true)
-    setError(null)
+  const competitors = useMemo(() => normalizeCompetitors(data), [data])
+  const activeSources = data?.activeSources || []
 
-    // Fetch from multiple sources in parallel
-    Promise.allSettled([
-      fetchSemrushCompetitors(domain),
-      fetchAggregatedCompetitors(domain),
-    ]).then(([semrushResult, aggResult]) => {
-      if (semrushResult.status === 'fulfilled') {
-        setCompetitors(Array.isArray(semrushResult.value) ? semrushResult.value : [])
-      }
-      if (aggResult.status === 'fulfilled') {
-        setAggregated(aggResult.value)
-      }
-    }).catch(e => setError(e.message))
-      .finally(() => setLoading(false))
+  const [search, setSearch] = useState('')
+  const [sortKey, setSortKey] = useState<'traffic' | 'commonKeywords' | 'relevance'>('traffic')
 
-    // Exa similar sites
-    setExaLoading(true)
-    fetchExaSearch(`sites similar to ${domain} SEO tools`, 6)
-      .then(data => setExaSimilar(data?.results || []))
-      .catch(() => setExaSimilar([]))
-      .finally(() => setExaLoading(false))
-  }, [domain])
+  const filtered = useMemo(() => {
+    let list = [...competitors]
+    if (search) {
+      const q = search.toLowerCase()
+      list = list.filter(c => c.domain.toLowerCase().includes(q))
+    }
+    list.sort((a, b) => b[sortKey] - a[sortKey])
+    return list
+  }, [competitors, search, sortKey])
 
-  const chartData = competitors.slice(0, 8).map(c => ({
-    name: (c.Dn || '').replace('www.', '').slice(0, 15),
-    keywords: parseInt(c.Or || '0', 10),
-    traffic: parseInt(c.Ot || '0', 10),
-    overlap: parseFloat(c.Cr || '0'),
-  }))
+  const dataState = error ? 'unavailable' : competitors.length > 0 ? 'live' : isLoading ? 'loading' : 'unavailable'
 
-  const activeSources = aggregated?.activeSources || ['SEMrush']
+  const summaryCards = [
+    { label: 'Competitors', value: competitors.length, color: 'text-fg' },
+    { label: 'Data Sources', value: activeSources.length, color: 'text-accent-light' },
+    { label: 'Avg Keywords', value: competitors.length ? Math.round(competitors.reduce((s, c) => s + c.commonKeywords, 0) / competitors.length).toLocaleString() : '—', color: 'text-green' },
+    { label: 'Top Competitor', value: competitors[0]?.domain || '—', color: 'text-fg' },
+  ]
 
   return (
-    <div className="space-y-4 lg:space-y-5 pt-4">
-      {/* Header */}
+    <div className="space-y-4 lg:space-y-5">
       <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2">
         <div>
-          <h2 className="text-base md:text-lg font-semibold text-fg">Competitor Analysis</h2>
-          <p className="text-xs md:text-sm text-fg-muted mt-0.5">Comparing {domain} against top organic competitors</p>
+          <h2 className="text-base md:text-lg font-semibold text-fg">Competitors</h2>
+          <p className="text-xs md:text-sm text-fg-muted mt-0.5">Competitor discovery and gap analysis for {domain}</p>
         </div>
-        <div className="flex gap-1.5 flex-wrap">
-          <span className="text-[11px] md:text-xs bg-orange-400/20 text-orange-200 border border-orange-400/30 px-2 py-1 rounded touch-target-reset">SEMrush</span>
-          <span className="text-[11px] md:text-xs bg-purple-500/20 text-purple-300 border border-purple-500/30 px-2 py-1 rounded touch-target-reset">DataForSEO</span>
-          <span className="text-[11px] md:text-xs bg-indigo-500/20 text-indigo-300 border border-indigo-500/30 px-2 py-1 rounded touch-target-reset">Exa</span>
-          {activeSources.includes('seranking') && (
-            <span className="text-[11px] md:text-xs bg-cyan-500/20 text-cyan-300 border border-cyan-500/30 px-2 py-1 rounded touch-target-reset">SE Ranking</span>
-          )}
+        <div className="flex gap-2 items-center">
+          <DataStateBadge state={dataState} source={activeSources.join(', ') || 'aggregated'} />
+          <button onClick={() => refetch()} className="rounded-lg border border-border px-3 py-1.5 text-xs text-fg-muted hover:border-border-light hover:text-fg transition-colors touch-target-reset">Refresh</button>
         </div>
       </div>
 
-      {/* Traffic Comparison Chart */}
-      <DataCard
-        title="Organic Traffic Comparison"
-        sources={['SEMrush']}
-        loading={loading}
-        error={error}
-      >
-        <div className="h-52 md:h-64">
-          <ResponsiveContainer width="100%" height="100%">
-            <BarChart data={chartData} margin={{ top: 5, right: 10, left: 0, bottom: 5 }}>
-              <XAxis dataKey="name" tick={{ fill: '#94A3B8', fontSize: 11 }} />
-              <YAxis tick={{ fill: '#94A3B8', fontSize: 11 }} />
-              <Tooltip
-                contentStyle={{ background: '#0F172A', border: '1px solid #1E293B', borderRadius: 8 }}
-                labelStyle={{ color: '#E2E8F0' }}
-              />
-              <Legend />
-              <Bar dataKey="keywords" name="Keywords" fill="#3B82F6" radius={[3, 3, 0, 0]} />
-              <Bar dataKey="traffic" name="Traffic" fill="#60A5FA" radius={[3, 3, 0, 0]} />
-            </BarChart>
-          </ResponsiveContainer>
+      {/* Summary Cards */}
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 md:gap-4">
+        {summaryCards.map((card, i) => (
+          <motion.div key={card.label} initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.4, delay: i * 0.05 }} className="bg-bg-card border border-border rounded-xl p-3.5 md:p-5 hover:border-border-light transition-colors card-glow">
+            <p className="text-[11px] md:text-xs font-semibold tracking-wider uppercase text-fg-muted">{card.label}</p>
+            <p className={`text-lg md:text-2xl font-bold mt-1 ${card.color} truncate`}>{card.value}</p>
+          </motion.div>
+        ))}
+      </div>
+
+      {/* Source badges */}
+      {activeSources.length > 0 && (
+        <div className="flex gap-1.5 flex-wrap">
+          {activeSources.map((src: string) => (
+            <span key={src} className="text-[10px] md:text-xs bg-accent/10 text-accent-light border border-accent/20 px-2 py-0.5 rounded touch-target-reset">{src}</span>
+          ))}
         </div>
-      </DataCard>
-
-      {/* Competitors Table */}
-      <DataCard
-        title="Top Organic Competitors"
-        sources={['SEMrush']}
-        loading={loading}
-        error={error}
-      >
-        {competitors.length === 0 && !loading && !error ? (
-          <p className="text-xs md:text-sm text-fg-muted text-center py-8">No competitor data available</p>
-        ) : (
-          <>
-            {/* Mobile card view */}
-            <div className="md:hidden space-y-2.5">
-              {competitors.map((c, i) => (
-                <div key={i} className="p-3.5 bg-bg-darkest rounded-lg border border-border card-glow">
-                  <div className="flex items-start justify-between gap-2 mb-2">
-                    <p className="text-sm font-medium text-fg">{c.Dn || '—'}</p>
-                    <span className={`text-[11px] px-1.5 py-0.5 rounded shrink-0 touch-target-reset ${
-                      parseFloat(c.Cr || '0') > 0.3 ? 'bg-red-500/20 text-red-300' :
-                      parseFloat(c.Cr || '0') > 0.1 ? 'bg-yellow-500/20 text-yellow-300' :
-                      'bg-green-500/20 text-green-300'
-                    }`}>
-                      {(parseFloat(c.Cr || '0') * 100).toFixed(1)}% overlap
-                    </span>
-                  </div>
-                  <div className="flex items-center gap-3 text-[11px] text-fg-dim">
-                    <span>KWs: <span className="text-fg-muted font-medium">{parseInt(c.Or || '0').toLocaleString()}</span></span>
-                    <span>Traffic: <span className="text-fg-muted font-medium">{parseInt(c.Ot || '0').toLocaleString()}</span></span>
-                    <span>Common: <span className="text-fg-muted font-medium">{parseInt(c.Np || '0').toLocaleString()}</span></span>
-                  </div>
-                </div>
-              ))}
-            </div>
-
-            {/* Desktop table view */}
-            <div className="hidden md:block overflow-x-auto table-scroll">
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="border-b border-border">
-                    <th className="text-left py-2 px-3 text-fg-dim font-medium">Domain</th>
-                    <th className="text-right py-2 px-3 text-fg-dim font-medium">Keywords</th>
-                    <th className="text-right py-2 px-3 text-fg-dim font-medium">Traffic</th>
-                    <th className="text-right py-2 px-3 text-fg-dim font-medium">Overlap</th>
-                    <th className="text-right py-2 px-3 text-fg-dim font-medium">Common KWs</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {competitors.map((c, i) => (
-                    <tr key={i} className="border-b border-border/50 hover:bg-white/[0.02]">
-                      <td className="py-2.5 px-3 text-fg font-medium">{c.Dn || '—'}</td>
-                      <td className="py-2.5 px-3 text-right text-fg-muted">{parseInt(c.Or || '0').toLocaleString()}</td>
-                      <td className="py-2.5 px-3 text-right text-fg-muted">{parseInt(c.Ot || '0').toLocaleString()}</td>
-                      <td className="py-2.5 px-3 text-right">
-                        <span className={`text-xs px-1.5 py-0.5 rounded touch-target-reset ${
-                          parseFloat(c.Cr || '0') > 0.3 ? 'bg-red-500/20 text-red-300' :
-                          parseFloat(c.Cr || '0') > 0.1 ? 'bg-yellow-500/20 text-yellow-300' :
-                          'bg-green-500/20 text-green-300'
-                        }`}>
-                          {(parseFloat(c.Cr || '0') * 100).toFixed(1)}%
-                        </span>
-                      </td>
-                      <td className="py-2.5 px-3 text-right text-fg-muted">{parseInt(c.Np || '0').toLocaleString()}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </>
-        )}
-      </DataCard>
-
-      {/* Exa Similar Sites */}
-      <DataCard title="Similar Sites (Semantic Discovery)" sources={['Exa']} loading={exaLoading}>
-        {exaSimilar.length > 0 ? (
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 md:gap-4">
-            {exaSimilar.map((site, i) => (
-              <motion.div
-                key={i}
-                initial={{ opacity: 0, y: 10 }}
-                animate={{ opacity: 1, y: 0 }}
-                transition={{ delay: i * 0.05 }}
-                className="p-3.5 md:p-3 bg-bg-darkest rounded-lg border border-border hover:border-border-light transition-colors card-glow"
-              >
-                <a href={site.url} target="_blank" rel="noopener noreferrer" className="text-xs md:text-sm font-medium text-accent hover:text-accent-light transition-colors line-clamp-1">
-                  {site.title || new URL(site.url).hostname}
-                </a>
-                <p className="text-[11px] md:text-xs text-fg-dim mt-0.5 truncate">{site.url}</p>
-                {site.text && <p className="text-[11px] md:text-xs text-fg-muted mt-1 line-clamp-2">{site.text.slice(0, 150)}</p>}
-                {site.score && (
-                  <div className="flex items-center gap-1.5 mt-2">
-                    <span className="text-[10px] text-fg-dim">Relevance:</span>
-                    <div className="flex-1 h-1 bg-white/5 rounded-full overflow-hidden">
-                      <div className="h-full bg-accent rounded-full" style={{ width: `${Math.min(site.score * 100, 100)}%` }} />
-                    </div>
-                    <span className="text-[10px] text-accent-light">{(site.score * 100).toFixed(0)}%</span>
-                  </div>
-                )}
-              </motion.div>
-            ))}
-          </div>
-        ) : !exaLoading ? (
-          <p className="text-xs md:text-sm text-fg-muted text-center py-6">No similar sites found</p>
-        ) : null}
-      </DataCard>
-
-      {/* Aggregated competitors from multiple sources */}
-      {aggregated?.competitors && aggregated.competitors.length > 0 && (
-        <DataCard title="Cross-Source Competitor Data" sources={activeSources}>
-          {/* Mobile card view */}
-          <div className="md:hidden space-y-2.5">
-            {aggregated.competitors.map((c, i) => (
-              <div key={i} className="p-3.5 bg-bg-darkest rounded-lg border border-border card-glow">
-                <div className="flex items-start justify-between gap-2 mb-2">
-                  <p className="text-sm font-medium text-fg">{c.domain}</p>
-                  <span className="text-[10px] bg-accent/10 text-accent-light px-1.5 py-0.5 rounded touch-target-reset">{c.source}</span>
-                </div>
-                <div className="flex items-center gap-3 text-[11px] text-fg-dim">
-                  <span>Common KWs: <span className="text-fg-muted font-medium">{c.commonKeywords?.toLocaleString() || '—'}</span></span>
-                  <span>Traffic: <span className="text-fg-muted font-medium">{c.organicTraffic?.toLocaleString() || '—'}</span></span>
-                  <span>DR: <span className="text-fg-muted font-medium">{c.dr || '—'}</span></span>
-                </div>
-              </div>
-            ))}
-          </div>
-
-          {/* Desktop table view */}
-          <div className="hidden md:block overflow-x-auto table-scroll">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b border-border">
-                  <th className="text-left py-2 px-3 text-fg-dim font-medium">Domain</th>
-                  <th className="text-right py-2 px-3 text-fg-dim font-medium">Common KWs</th>
-                  <th className="text-right py-2 px-3 text-fg-dim font-medium">Traffic</th>
-                  <th className="text-right py-2 px-3 text-fg-dim font-medium">DR</th>
-                  <th className="text-right py-2 px-3 text-fg-dim font-medium">Source</th>
-                </tr>
-              </thead>
-              <tbody>
-                {aggregated.competitors.map((c, i) => (
-                  <tr key={i} className="border-b border-border/50 hover:bg-white/[0.02]">
-                    <td className="py-2.5 px-3 text-fg font-medium">{c.domain}</td>
-                    <td className="py-2.5 px-3 text-right text-fg-muted">{c.commonKeywords?.toLocaleString() || '—'}</td>
-                    <td className="py-2.5 px-3 text-right text-fg-muted">{c.organicTraffic?.toLocaleString() || '—'}</td>
-                    <td className="py-2.5 px-3 text-right text-fg-muted">{c.dr || '—'}</td>
-                    <td className="py-2.5 px-3 text-right">
-                      <span className="text-[10px] bg-accent/10 text-accent-light px-1.5 py-0.5 rounded touch-target-reset">{c.source}</span>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </DataCard>
       )}
 
-      {/* Keyword Gap */}
-      <DataCard title="Keyword Gap Analysis" sources={['SEMrush', 'Ahrefs']}>
-        <div className="text-center py-8 text-fg-muted">
-          <svg width="40" height="40" viewBox="0 0 40 40" fill="none" className="mx-auto mb-3 opacity-30">
-            <circle cx="20" cy="20" r="18" stroke="currentColor" strokeWidth="2" />
-            <path d="M13 20h14M20 13v14" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
-          </svg>
-          <p className="text-xs md:text-sm">Enter a competitor domain to see keyword gaps</p>
-          <input
-            type="text"
-            placeholder="competitor.com"
-            value={gapDomain}
-            onChange={e => setGapDomain(e.target.value)}
-            className="mt-3 bg-bg-card border border-border rounded-lg px-3 py-2.5 text-sm text-fg placeholder:text-fg-dim focus:outline-none focus:border-accent w-full sm:w-64"
-          />
+      {/* Filters */}
+      <DataCard title="Competitor Analysis" dataState={dataState} fetchedAt={data ? new Date().toISOString() : undefined}>
+        <div className="flex flex-col sm:flex-row gap-2.5 sm:gap-3 mb-4">
+          <div className="relative flex-1">
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none" className="absolute left-3 top-1/2 -translate-y-1/2 text-fg-dim"><circle cx="7" cy="7" r="5" stroke="currentColor" strokeWidth="1.5" /><path d="M11 11l3 3" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" /></svg>
+            <input type="text" placeholder="Search competitor domain..." value={search} onChange={e => setSearch(e.target.value)} className="w-full pl-9 pr-3 py-2.5 rounded-lg bg-bg-darkest border border-border text-sm text-fg placeholder:text-fg-dim focus:outline-none focus:border-accent transition-colors" />
+          </div>
+          <select value={sortKey} onChange={e => setSortKey(e.target.value as any)} className="px-3 py-2.5 rounded-lg bg-bg-darkest border border-border text-sm text-fg-muted focus:outline-none focus:border-accent transition-colors">
+            <option value="traffic">Sort by Traffic</option>
+            <option value="commonKeywords">Sort by Keywords</option>
+            <option value="relevance">Sort by Relevance</option>
+          </select>
+        </div>
+
+        {isLoading && <div className="animate-pulse space-y-3">{[1,2,3,4].map(i => <div key={i} className="h-16 bg-white/[0.06] rounded-xl" />)}</div>}
+        {error && !competitors.length && (
+          <div className="text-center py-8">
+            <p className="text-sm text-red-300">Failed to load competitors</p>
+            <p className="text-xs text-fg-dim mt-1">{error instanceof Error ? error.message : 'API unavailable'}</p>
+            <button onClick={() => refetch()} className="mt-3 px-3 py-1.5 rounded-lg border border-accent/30 text-xs text-accent-light">Retry</button>
+          </div>
+        )}
+        {!isLoading && !error && competitors.length === 0 && (
+          <div className="text-center py-8">
+            <p className="text-sm text-fg-muted">No competitors found for {domain}</p>
+            <p className="text-xs text-fg-dim mt-1">Connect data sources in Settings to discover competitors</p>
+          </div>
+        )}
+
+        {/* Mobile card view */}
+        <div className="md:hidden space-y-3">
+          {filtered.map((comp, i) => (
+            <div key={comp.domain} className="rounded-xl border border-border bg-bg-darkest p-3.5">
+              <div className="flex items-start justify-between">
+                <div>
+                  <p className="text-sm font-medium text-fg">{comp.domain}</p>
+                  <p className="text-xs text-fg-dim mt-0.5">{comp.source}</p>
+                </div>
+                <span className="text-xs text-accent-light">#{i + 1}</span>
+              </div>
+              <div className="grid grid-cols-3 gap-2 mt-3">
+                <div><p className="text-[10px] text-fg-dim">Keywords</p><p className="text-sm font-semibold text-fg">{comp.commonKeywords.toLocaleString()}</p></div>
+                <div><p className="text-[10px] text-fg-dim">Traffic</p><p className="text-sm font-semibold text-fg">{comp.traffic.toLocaleString()}</p></div>
+                <div><p className="text-[10px] text-fg-dim">Value</p><p className="text-sm font-semibold text-fg">${comp.trafficValue.toLocaleString()}</p></div>
+              </div>
+            </div>
+          ))}
+        </div>
+
+        {/* Desktop table view */}
+        <div className="hidden md:block overflow-x-auto table-scroll">
+          <table className="w-full text-sm min-w-[700px]">
+            <thead>
+              <tr className="text-xs font-semibold tracking-wider uppercase text-fg-dim border-b border-border">
+                <th className="text-left py-3 px-4">#</th>
+                <th className="text-left py-3 px-4">Domain</th>
+                <th className="text-right py-3 px-4">Keywords</th>
+                <th className="text-right py-3 px-4">Traffic</th>
+                <th className="text-right py-3 px-4">Traffic Value</th>
+                <th className="text-left py-3 px-4">Source</th>
+              </tr>
+            </thead>
+            <tbody>
+              {filtered.map((comp, i) => (
+                <tr key={comp.domain} className="border-t border-border hover:bg-white/[0.02] transition-colors">
+                  <td className="py-3 px-4 text-fg-dim">{i + 1}</td>
+                  <td className="py-3 px-4">
+                    <span className="text-fg font-medium">{comp.domain}</span>
+                    {comp.topCountry && <span className="ml-2 text-[10px] px-1.5 py-0.5 rounded bg-white/[0.06] text-fg-dim">{comp.topCountry}</span>}
+                  </td>
+                  <td className="py-3 px-4 text-right text-fg-muted">{comp.commonKeywords.toLocaleString()}</td>
+                  <td className="py-3 px-4 text-right text-fg-muted">{comp.traffic.toLocaleString()}</td>
+                  <td className="py-3 px-4 text-right text-fg-muted">${comp.trafficValue.toLocaleString()}</td>
+                  <td className="py-3 px-4"><span className="text-[10px] px-1.5 py-0.5 rounded bg-accent/10 text-accent-light">{comp.source}</span></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </div>
       </DataCard>
     </div>
