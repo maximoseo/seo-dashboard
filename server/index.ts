@@ -62,6 +62,24 @@ const expensiveLimiter = rateLimit({
 app.use('/api', generalLimiter)
 
 
+
+// DEBUG: Echo test for password comparison
+app.post('/api/debug-echo', (req, res) => {
+  const body = req.body || {}
+  const inputPassword = body.password || ''
+  const expectedPassword = DASHBOARD_AUTH_PASSWORD || ''
+  res.json({
+    inputLen: inputPassword.length,
+    inputHex: Buffer.from(inputPassword).toString('hex'),
+    expectedLen: expectedPassword.length,
+    expectedHex: Buffer.from(expectedPassword).toString('hex'),
+    match: inputPassword === expectedPassword,
+    safeCompareResult: safeCompare(inputPassword, expectedPassword),
+    bodyKeys: Object.keys(body),
+    rawBody: JSON.stringify(body).slice(0, 200)
+  })
+})
+
 // DEBUG: Remove after testing
 app.get('/api/debug-env', (_req, res) => {
   res.json({
@@ -186,7 +204,7 @@ function clearSessionCookie(req: express.Request): string {
 
 // Auth middleware — /api/health and /api/auth/login are intentionally public.
 app.use('/api', async (req, res, next) => {
-  if (req.path === '/health' || req.path === '/auth/login' || req.path === '/debug-env') {
+  if (req.path === '/health' || req.path === '/auth/login' || req.path === '/debug-env' || req.path === '/debug-echo') {
     return next()
   }
 
