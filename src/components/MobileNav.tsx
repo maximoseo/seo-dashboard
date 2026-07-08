@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 
 const mainItems = [
-  { name: 'Dashboard', icon: DashboardMobileIcon },
+  { name: 'Clients', icon: CompetitorsMobileIcon },
   { name: 'Keywords', icon: KeywordsMobileIcon },
   { name: 'Backlinks', icon: BacklinksMobileIcon },
   { name: 'Vitals', icon: VitalsMobileIcon },
@@ -10,13 +10,11 @@ const mainItems = [
 ]
 
 const moreItems = [
-  { name: 'Clients', icon: CompetitorsMobileIcon },
   { name: 'Pages', icon: PagesMobileIcon },
   { name: 'Content', icon: ContentMobileIcon },
   { name: 'Competitors', icon: CompetitorsMobileIcon },
   { name: 'Local SEO', icon: PagesMobileIcon },
   { name: 'GEO / AI', icon: ContentMobileIcon },
-  { name: 'Alerts', icon: AlertsMobileIcon },
   { name: 'Tasks', icon: AlertsMobileIcon },
   { name: 'Reports', icon: PagesMobileIcon },
   { name: 'Settings', icon: SettingsMobileIcon },
@@ -109,17 +107,6 @@ export default function MobileNav({ activeNav, onNavChange }: { activeNav: strin
   )
 }
 
-function DashboardMobileIcon({ active }: { active: boolean }) {
-  const color = active ? '#3B82F6' : '#64748B'
-  return (
-    <svg width="22" height="22" viewBox="0 0 22 22" fill="none">
-      <rect x="2" y="2" width="7" height="7" rx="2" fill={color} opacity={active ? 1 : 0.7} />
-      <rect x="13" y="2" width="7" height="7" rx="2" fill={color} opacity={active ? 1 : 0.7} />
-      <rect x="2" y="13" width="7" height="7" rx="2" fill={color} opacity={active ? 1 : 0.7} />
-      <rect x="13" y="13" width="7" height="7" rx="2" fill={color} opacity={active ? 1 : 0.7} />
-    </svg>
-  )
-}
 
 function KeywordsMobileIcon({ active }: { active: boolean }) {
   const color = active ? '#3B82F6' : '#64748B'

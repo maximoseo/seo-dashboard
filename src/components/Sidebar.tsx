@@ -18,7 +18,6 @@ async function fetchAlertCount(domain: string): Promise<number> {
 }
 
 const navItems = [
-  { name: 'Dashboard', icon: DashboardIcon },
   { name: 'Clients', icon: CompetitorsIcon },
   { name: 'Keywords', icon: KeywordsIcon },
   { name: 'Backlinks', icon: BacklinksIcon },
@@ -185,17 +184,6 @@ export default function Sidebar({ activeNav, onNavChange, mobileOpen = false, on
         )}
       </AnimatePresence>
     </>
-  )
-}
-
-function DashboardIcon({ active }: { active: boolean }) {
-  return (
-    <svg width="18" height="18" viewBox="0 0 18 18" fill="none">
-      <rect x="1" y="1" width="6.5" height="6.5" rx="1.5" fill={active ? '#60A5FA' : 'currentColor'} opacity={active ? 1 : 0.5} />
-      <rect x="10.5" y="1" width="6.5" height="6.5" rx="1.5" fill={active ? '#60A5FA' : 'currentColor'} opacity={active ? 1 : 0.5} />
-      <rect x="1" y="10.5" width="6.5" height="6.5" rx="1.5" fill={active ? '#60A5FA' : 'currentColor'} opacity={active ? 1 : 0.5} />
-      <rect x="10.5" y="10.5" width="6.5" height="6.5" rx="1.5" fill={active ? '#60A5FA' : 'currentColor'} opacity={active ? 1 : 0.5} />
-    </svg>
   )
 }
 

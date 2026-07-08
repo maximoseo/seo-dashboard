@@ -30,7 +30,6 @@ const ReportsPage = lazy(() => import('@/pages/ReportsPage'))
 const SettingsPage = lazy(() => import('@/pages/SettingsPage'))
 
 const navRouteMap: Record<string, string> = {
-  Dashboard: '/',
   Clients: '/clients',
   Keywords: '/keywords',
   Backlinks: '/backlinks',
