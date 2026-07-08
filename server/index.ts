@@ -186,7 +186,7 @@ function clearSessionCookie(req: express.Request): string {
 
 // Auth middleware — /api/health and /api/auth/login are intentionally public.
 app.use('/api', async (req, res, next) => {
-  if (req.path === '/health' || req.path === '/auth/login') {
+  if (req.path === '/health' || req.path === '/auth/login' || req.path === '/debug-env') {
     return next()
   }
 
