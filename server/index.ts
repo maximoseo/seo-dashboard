@@ -63,35 +63,7 @@ app.use('/api', generalLimiter)
 
 
 
-// DEBUG: Echo test for password comparison
-app.post('/api/debug-echo', (req, res) => {
-  const body = req.body || {}
-  const inputPassword = body.password || ''
-  const expectedPassword = DASHBOARD_AUTH_PASSWORD || ''
-  res.json({
-    inputLen: inputPassword.length,
-    inputHex: Buffer.from(inputPassword).toString('hex'),
-    expectedLen: expectedPassword.length,
-    expectedHex: Buffer.from(expectedPassword).toString('hex'),
-    match: inputPassword === expectedPassword,
-    safeCompareResult: safeCompare(inputPassword, expectedPassword),
-    bodyKeys: Object.keys(body),
-    rawBody: JSON.stringify(body).slice(0, 200)
-  })
-})
 
-// DEBUG: Remove after testing
-app.get('/api/debug-env', (_req, res) => {
-  res.json({
-    supabaseUrl: SUPABASE_URL ? { len: SUPABASE_URL.length, starts: SUPABASE_URL.slice(0, 30) } : null,
-    supabaseKey: SUPABASE_ANON_KEY ? { len: SUPABASE_ANON_KEY.length, starts: SUPABASE_ANON_KEY.slice(0, 30) } : null,
-    authUsername: DASHBOARD_AUTH_USERNAME ? { len: DASHBOARD_AUTH_USERNAME.length, val: DASHBOARD_AUTH_USERNAME } : null,
-    authPassword: DASHBOARD_AUTH_PASSWORD ? { len: DASHBOARD_AUTH_PASSWORD.length, hex: Buffer.from(DASHBOARD_AUTH_PASSWORD).toString("hex"), charCodes: [...DASHBOARD_AUTH_PASSWORD].map(c => c.charCodeAt(0)) } : null,
-    authSecret: DASHBOARD_AUTH_SECRET ? { len: DASHBOARD_AUTH_SECRET.length, starts: DASHBOARD_AUTH_SECRET.slice(0, 10) + '...' } : null,
-    supabaseClient: !!supabase,
-    authConfigured: dashboardAuthConfigured(),
-  })
-})
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // SECURITY: Auth middleware — Supabase JWT verification
