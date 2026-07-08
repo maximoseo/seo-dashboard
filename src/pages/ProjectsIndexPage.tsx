@@ -61,6 +61,11 @@ export default function ProjectsIndexPage() {
         <div className="mt-4 grid grid-cols-1 gap-3 lg:grid-cols-2 xl:grid-cols-3">
           {filtered.map(project => (
             <button key={project.id} onClick={() => setActiveProject(project.domain)} className="rounded-2xl border border-border bg-bg-darkest p-4 text-left transition-colors hover:border-accent/50 hover:bg-white/[0.04]">
+              {project.screenshotUrl && (
+                <div className="mb-3 overflow-hidden rounded-xl border border-white/10">
+                  <img src={project.screenshotUrl} alt={`${project.domain} preview`} className="h-32 w-full object-cover object-top" loading="lazy" onError={(e) => { (e.target as HTMLImageElement).style.display = 'none' }} />
+                </div>
+              )}
               <div className="flex items-start justify-between gap-3">
                 <div className="min-w-0">
                   <p className="truncate text-base font-semibold text-fg">{project.name}</p>
