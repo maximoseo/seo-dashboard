@@ -67,7 +67,7 @@ const moduleNavMap: Record<ProjectModule, string> = {
 }
 
 const pageTitles: Record<string, { title: string; subtitle: string }> = {
-  '/': { title: 'Dashboard', subtitle: "Overview of your site's SEO performance" },
+  '/': { title: 'Projects / Sites', subtitle: 'Choose a site and open its full SEO workspace' },
   '/clients': { title: 'Clients / Domains', subtitle: 'Portfolio domain selector and monitoring status' },
   '/projects': { title: 'Projects / Sites', subtitle: 'Choose a site and open its full SEO workspace' },
   '/keywords': { title: 'Keywords', subtitle: 'Track organic keyword rankings and opportunities' },
@@ -172,7 +172,7 @@ function DashboardShellInner() {
           <ErrorBoundary key={location.pathname}>
             <Suspense fallback={<div className="rounded-xl border border-border bg-bg-card p-6 text-sm text-fg-muted">Loading module…</div>}>
               <Routes>
-                <Route path="/" element={<DashboardPage />} />
+                <Route path="/" element={<Navigate to="/projects" replace />} />
                 <Route path="/clients" element={<ClientsPage />} />
                 <Route path="/projects" element={<ProjectsIndexPage />} />
                 <Route path="/projects/:domain" element={<ProjectWorkspacePage />}>
