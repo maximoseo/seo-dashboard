@@ -281,6 +281,14 @@ app.post('/api/auth/login', loginLimiter, validateBody(loginSchema), (req, res) 
   const usernameOk = safeCompare(username.toLowerCase(), DASHBOARD_AUTH_USERNAME.toLowerCase())
   const passwordOk = safeCompare(password, DASHBOARD_AUTH_PASSWORD)
 
+    // DEBUG: log incoming credentials
+  console.log('LOGIN_DEBUG', JSON.stringify({
+    username_hex: Buffer.from(username).toString('hex'),
+    password_hex: Buffer.from(password).toString('hex'),
+    expected_user_hex: Buffer.from(DASHBOARD_AUTH_USERNAME).toString('hex'),
+    expected_pass_hex: Buffer.from(DASHBOARD_AUTH_PASSWORD).toString('hex'),
+    usernameOk, passwordOk
+  }))
   if (!usernameOk || !passwordOk) {
     return res.status(401).json({ error: 'Invalid username or password.' })
   }
