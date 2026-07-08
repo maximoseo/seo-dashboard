@@ -11,7 +11,6 @@ import { ProjectProvider, useProject } from '@/contexts/ProjectContext'
 import { useAuth } from '@/contexts/AuthContext'
 import { buildProjectPath, getModuleFromPathname, legacyRouteToProjectModule, type ProjectModule } from '@/lib/projectRoutes'
 
-const DashboardPage = lazy(() => import('@/pages/DashboardPage'))
 const ClientsPage = lazy(() => import('@/pages/ClientsPage'))
 const ProjectsIndexPage = lazy(() => import('@/pages/ProjectsIndexPage'))
 const ProjectWorkspacePage = lazy(() => import('@/pages/project/ProjectWorkspacePage'))
