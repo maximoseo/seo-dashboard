@@ -9,6 +9,7 @@ interface TopBarProps {
   title?: string
   subtitle?: string
   onMenuClick?: () => void
+  breadcrumbs?: Array<{ label: string; href?: string }>
 }
 
 function formatDate(date: Date): string {
@@ -22,7 +23,7 @@ function rangeLabel(days: number): string {
   return `${formatDate(start)} – ${formatDate(end)}`
 }
 
-export default function TopBar({ title = 'Dashboard', subtitle = "Overview of your site's SEO performance", onMenuClick }: TopBarProps) {
+export default function TopBar({ title = 'Dashboard', subtitle = "Overview of your site's SEO performance", onMenuClick, breadcrumbs }: TopBarProps) {
   const [showDatePicker, setShowDatePicker] = useState(false)
   const [selectedRange, setSelectedRange] = useState('6M')
   const navigate = useNavigate()
@@ -62,6 +63,20 @@ export default function TopBar({ title = 'Dashboard', subtitle = "Overview of yo
           </button>
 
           <div className="min-w-0">
+            {breadcrumbs && breadcrumbs.length > 0 && (
+              <nav className="flex items-center gap-1 text-[11px] text-fg-dim mb-0.5">
+                {breadcrumbs.map((crumb, i) => (
+                  <span key={i} className="flex items-center gap-1">
+                    {i > 0 && <span>/</span>}
+                    {crumb.href ? (
+                      <a href={crumb.href} className="hover:text-fg transition-colors">{crumb.label}</a>
+                    ) : (
+                      <span className="text-fg-muted">{crumb.label}</span>
+                    )}
+                  </span>
+                ))}
+              </nav>
+            )}
             <div className="flex flex-wrap items-center gap-2">
               <h1 className="text-lg md:text-xl lg:text-2xl font-bold text-fg truncate">{title}</h1>
               {activeProject && <DataStateBadge state={activeProject.dataState} fetchedAt={activeProject.lastFetchedAt} className="hidden md:inline-flex" />}
