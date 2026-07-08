@@ -8,7 +8,7 @@ export default function ProjectTabs() {
   if (!activeProject) return null
 
   return (
-    <nav className="-mx-1 flex gap-2 overflow-x-auto px-1 pb-1" aria-label="Project modules">
+    <nav className="-mx-1 flex gap-2 overflow-x-auto px-1 pb-1 project-tabs-scroll" aria-label="Project modules">
       {activeProject.modules.map(module => {
         const isActive = module.slug === 'overview'
           ? location.pathname === module.href

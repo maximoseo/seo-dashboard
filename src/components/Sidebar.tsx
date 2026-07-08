@@ -58,8 +58,14 @@ export default function Sidebar({ activeNav, onNavChange, mobileOpen = false, on
   // Lock body scroll when mobile sidebar is open
   useEffect(() => {
     if (mobileOpen) {
-      document.body.style.overflow = 'hidden'
-      return () => { document.body.style.overflow = '' }
+      const scrollY = window.scrollY
+      document.body.classList.add('sidebar-open')
+      document.body.style.top = `-${scrollY}px`
+      return () => {
+        document.body.classList.remove('sidebar-open')
+        document.body.style.top = ''
+        window.scrollTo(0, scrollY)
+      }
     }
   }, [mobileOpen])
 

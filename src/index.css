@@ -53,7 +53,7 @@ body {
   text-rendering: geometricPrecision;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
-  overscroll-behavior-y: none;
+  overscroll-behavior-y: contain;
 }
 
 img,
@@ -189,10 +189,39 @@ select {
 .table-scroll {
   -webkit-overflow-scrolling: touch;
   scrollbar-width: none;
+  overscroll-behavior-x: contain;
 }
 
 .table-scroll::-webkit-scrollbar {
   display: none;
+}
+
+/* Smooth momentum scrolling on mobile */
+@supports (-webkit-touch-callout: none) {
+  .mobile-scroll {
+    -webkit-overflow-scrolling: touch;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+  }
+}
+
+/* Project tabs: prevent horizontal scroll from hijacking vertical swipe */
+.project-tabs-scroll {
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior-x: contain;
+  scroll-snap-type: x proximity;
+}
+
+.project-tabs-scroll > * {
+  scroll-snap-align: start;
+}
+
+/* Fix mobile sidebar drawer scroll lock */
+body.sidebar-open {
+  overflow: hidden;
+  position: fixed;
+  width: 100%;
+  height: 100%;
 }
 
 /* Reduced motion */
