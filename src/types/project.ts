@@ -34,6 +34,7 @@ export interface ProjectSummary {
   market: string
   status: ProjectStatus
   priority: ProjectPriority
+  screenshotUrl?: string
   healthScore: number | null
   alertCount: number
   taskCount: number
