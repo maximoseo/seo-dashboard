@@ -10,6 +10,7 @@ import { SEOProvider } from '@/contexts/SEOContext'
 import { ProjectProvider, useProject } from '@/contexts/ProjectContext'
 import { useAuth } from '@/contexts/AuthContext'
 import { buildProjectPath, getModuleFromPathname, legacyRouteToProjectModule, type ProjectModule } from '@/lib/projectRoutes'
+import { useKeyboardShortcuts } from '@/hooks/useKeyboardShortcuts'
 
 const ClientsPage = lazy(() => import('@/pages/ClientsPage'))
 const ProjectsIndexPage = lazy(() => import('@/pages/ProjectsIndexPage'))
@@ -110,6 +111,7 @@ function DashboardShellInner() {
   const { activeDomain, activeProject } = useProject()
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const activeNav = getActiveNav(location.pathname)
+  useKeyboardShortcuts()
 
   const projectModule = getModuleFromPathname(location.pathname)
   const legacyModule = legacyRouteToProjectModule(location.pathname)
