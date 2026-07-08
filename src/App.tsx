@@ -1,5 +1,6 @@
 import { lazy, Suspense, useState } from 'react'
 import { Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom'
+import { motion, AnimatePresence } from 'framer-motion'
 import Sidebar from '@/components/Sidebar'
 import TopBar from '@/components/TopBar'
 import MobileNav from '@/components/MobileNav'
@@ -171,6 +172,14 @@ function DashboardShellInner() {
         <div className="px-4 md:px-6 lg:px-8 py-5 lg:py-6">
           <ErrorBoundary key={location.pathname}>
             <Suspense fallback={<div className="rounded-xl border border-border bg-bg-card p-6 text-sm text-fg-muted">Loading module…</div>}>
+              <AnimatePresence mode="wait">
+                <motion.div
+                  key={location.pathname}
+                  initial={{ opacity: 0, y: 8 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: -8 }}
+                  transition={{ duration: 0.15, ease: 'easeOut' }}
+                >
               <Routes>
                 <Route path="/" element={<Navigate to="/projects" replace />} />
                 <Route path="/clients" element={<ClientsPage />} />
@@ -204,6 +213,8 @@ function DashboardShellInner() {
                 <Route path="/settings" element={<SettingsPage />} />
                 <Route path="*" element={<Navigate to="/projects" replace />} />
               </Routes>
+                </motion.div>
+              </AnimatePresence>
             </Suspense>
           </ErrorBoundary>
         </div>
