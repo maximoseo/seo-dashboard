@@ -4,6 +4,7 @@ import { fetchDataForSeoBacklinks, fetchDataForSeoDomainSummary } from '@/servic
 import { useSEO } from '@/contexts/SEOContext'
 import { useAhrefs } from '@/contexts/AhrefsContext'
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts'
+import { exportToCSV, ExportCSVButton } from '@/lib/csvExport'
 
 interface Backlink {
   url_from?: string
@@ -56,6 +57,12 @@ export default function BacklinksPage() {
     .slice(0, 8)
     .map(([name, count]) => ({ name: name.slice(0, 20), count }))
 
+  const handleExport = () => {
+    const headers = ['Source Domain', 'URL From', 'Anchor', 'Rank', 'Dofollow', 'First Seen']
+    const rows = filtered.map(bl => [bl.domain_from || '', bl.url_from || '', bl.anchor || '', bl.rank || '', bl.dofollow ? 'Yes' : 'No', bl.first_seen || ''])
+    exportToCSV(headers, rows, `backlinks-${domain}-${new Date().toISOString().slice(0,10)}`)
+  }
+
   return (
     <div className="space-y-4 lg:space-y-5 pt-4">
       {/* Header with source badges */}
@@ -65,6 +72,7 @@ export default function BacklinksPage() {
           <p className="text-xs md:text-sm text-fg-muted mt-0.5">Backlink analysis from multiple data providers</p>
         </div>
         <div className="flex gap-1.5 flex-wrap">
+          <ExportCSVButton onClick={handleExport} />
           <span className="text-[11px] md:text-xs bg-orange-500/20 text-orange-300 border border-orange-500/30 px-2 py-1 rounded touch-target-reset">Ahrefs</span>
           <span className="text-[11px] md:text-xs bg-purple-500/20 text-purple-300 border border-purple-500/30 px-2 py-1 rounded touch-target-reset">DataForSEO</span>
           <span className="text-[11px] md:text-xs bg-cyan-500/20 text-cyan-300 border border-cyan-500/30 px-2 py-1 rounded touch-target-reset">SE Ranking</span>

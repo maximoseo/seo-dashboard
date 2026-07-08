@@ -4,6 +4,7 @@ import { useKeywords } from '../api/client'
 import { useSEO } from '@/contexts/SEOContext'
 import DataStateBadge from '@/components/DataStateBadge'
 import { normalizeSemrushKeywords, normalizeAhrefsKeywords, normalizeDataForSEOKeywords, formatMetric } from '../api/normalize'
+import { exportToCSV, ExportCSVButton } from '@/lib/csvExport'
 
 type SortDir = 'asc' | 'desc'
 type SortKey = 'keyword' | 'volume' | 'position' | 'difficulty' | 'cpc' | 'traffic'
@@ -170,6 +171,12 @@ export default function KeywordsPage() {
     else { setSortKey(key); setSortDir('asc') }
   }
 
+  const handleExport = () => {
+    const headers = ['Keyword', 'Volume', 'Position', 'Change', 'Difficulty', 'CPC', 'Intent', 'URL']
+    const rows = filtered.map(k => [k.keyword, k.volume, k.position, k.change, k.difficulty, k.cpc, k.intent, k.url])
+    exportToCSV(headers, rows, `keywords-${domain}-${new Date().toISOString().slice(0,10)}`)
+  }
+
   const SortIcon = ({ col }: { col: SortKey }) => (
     <svg width="10" height="10" viewBox="0 0 10 10" fill="none" className={`inline ml-1 ${sortKey === col ? 'text-accent' : 'text-fg-dim'}`}>
       <path d={sortDir === 'asc' && sortKey === col ? 'M2 6l3-3 3 3' : 'M2 4l3 3 3-3'} stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
@@ -192,6 +199,7 @@ export default function KeywordsPage() {
           <p className="text-xs md:text-sm text-fg-muted mt-0.5">Track keyword positions across multiple data sources</p>
         </div>
         <div className="flex gap-1.5 flex-wrap items-center">
+          <ExportCSVButton onClick={handleExport} />
           <DataStateBadge state={error ? 'unavailable' : keywords.length > 0 ? 'live' : isLoading ? 'cached' : 'unavailable'} source={domain} />
           <span className="text-[10px] md:text-xs bg-orange-500/20 text-orange-300 border border-orange-500/30 px-1.5 md:px-2 py-0.5 md:py-1 rounded touch-target-reset">Ahrefs</span>
           <span className="text-[10px] md:text-xs bg-orange-400/20 text-orange-200 border border-orange-400/30 px-1.5 md:px-2 py-0.5 md:py-1 rounded touch-target-reset">SEMrush</span>
