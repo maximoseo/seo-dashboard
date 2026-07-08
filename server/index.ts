@@ -1181,7 +1181,7 @@ async function loadProjectList(): Promise<ProjectListResult> {
     try {
       const { data, error } = await supabase
         .from('seo_domains')
-        .select('id, client_id, domain, market, name, status, priority, seo_clients(id, name)')
+        .select('id, client_id, domain, market, name, status, priority, screenshot_url, seo_clients(id, name)')
         .order('created_at', { ascending: true })
 
       if (error) {
@@ -1206,6 +1206,7 @@ async function loadProjectList(): Promise<ProjectListResult> {
             market: row.market || 'Unassigned market',
             status: normalizeProjectStatus(row.status),
             priority: normalizeProjectPriority(row.priority),
+            screenshotUrl: row.screenshot_url || undefined,
           }
         }).filter(project => project.domain)
 
