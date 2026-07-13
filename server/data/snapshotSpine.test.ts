@@ -75,4 +75,24 @@ describe('snapshot spine', () => {
     expect(alertDedupeKey({ domain: 'A.com', module: 'Traffic', title: 'Organic traffic dropped' }))
       .toBe('a-com-traffic-organic-traffic-dropped')
   })
+
+  it('does not invent task totals when open tasks map is empty', () => {
+    const overlays = buildSnapshotOverlayMap(
+      [
+        {
+          domain_id: 'd2',
+          provider: 'alerts',
+          snapshot_date: '2026-07-13',
+          fetched_at: '2026-07-13T11:00:00Z',
+          data: { alerts: [{ severity: 'warning', title: 'x' }] },
+        },
+      ],
+      new Map([['d2', 1]]),
+      new Map(),
+      new Map([['d2', { domain: 'b.com', status: 'active', priority: 'medium' }]]),
+    )
+    const row = overlays.get('d2')
+    expect(row?.alertCount).toBe(1)
+    expect(row?.taskCount).toBe(0)
+  })
 })

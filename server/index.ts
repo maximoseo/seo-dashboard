@@ -319,7 +319,7 @@ function humanizeZodIssue(issue: z.ZodIssue): string {
   if (path === 'locale') return 'Locale must be he or en'
   if (path === 'template') return 'Choose a report template: weekly, monthly, executive, or local-geo'
   if (path === 'format') return 'Format must be json, html, or md'
-  if (path === 'status') return 'Status must be one of: queued, working, blocked, snoozed, verified, closed'
+  if (path === 'status') return 'Status must be one of: queued, working, blocked, verified (snooze is action+tag)'
   if (path === 'action') return 'Action must be close, reopen, snooze, or set-status'
   if (msg.includes('Too small') || issue.code === 'too_small') return `${path} is required`
   if (issue.code === 'invalid_type') return `${path}: expected a valid value`
@@ -1789,8 +1789,9 @@ app.get('/api/tasks', async (req, res) => {
   })
 })
 
-// ── Task lifecycle (close / snooze / reopen) ───────────────────────────────────
-const taskStatusSchema = z.enum(['queued', 'working', 'blocked', 'snoozed', 'verified', 'closed'])
+// Task statuses (DB check): queued | working | blocked | verified
+// Snooze is durable via brief tag; status temporarily blocked so crash-safe filters still work.
+const taskStatusSchema = z.enum(['queued', 'working', 'blocked', 'verified'])
 const taskActionSchema = z.object({
   action: z.enum(['close', 'reopen', 'snooze', 'set-status']).optional(),
   status: taskStatusSchema.optional(),
@@ -1820,11 +1821,13 @@ app.patch('/api/tasks/:id', validateBody(taskActionSchema), async (req, res) => 
   let nextBrief = String(existing.brief || '')
   const stamp = new Date().toISOString()
   if (action === 'close') nextStatus = 'verified'
-  else if (action === 'reopen') nextStatus = 'queued'
-  else if (action === 'snooze') {
+  else if (action === 'reopen') {
+    nextStatus = 'queued'
+    nextBrief = nextBrief.replace(/\[SNOOZED until[^\]]*\]\s*/g, '').trim()
+  } else if (action === 'snooze') {
     const hours = body.snoozeHours || 24
     const until = new Date(Date.now() + hours * 60 * 60 * 1000).toISOString()
-    nextStatus = 'snoozed'
+    nextStatus = 'blocked'
     const tag = `[SNOOZED until ${until}]`
     nextBrief = nextBrief.includes('[SNOOZED until')
       ? nextBrief.replace(/\[SNOOZED until[^\]]*\]/, tag)
@@ -1845,20 +1848,25 @@ app.patch('/api/tasks/:id', validateBody(taskActionSchema), async (req, res) => 
     .single()
   if (upErr) return res.status(500).json({ error: upErr.message })
 
-  if ((action === 'close' || nextStatus === 'verified' || nextStatus === 'closed') && updated?.alert_id) {
+  if ((action === 'close' || nextStatus === 'verified') && updated?.alert_id) {
     await supabaseAdmin
       .from('seo_alerts')
-      .update({ status: 'resolved', updated_at: stamp })
+      .update({ status: 'verified', updated_at: stamp })
       .eq('id', updated.alert_id)
       .in('status', ['open', 'assigned', 'working'])
   }
+
+  const uiStatus =
+    nextStatus === 'blocked' && String(updated?.brief || '').includes('[SNOOZED until')
+      ? 'snoozed'
+      : updated.status
 
   res.json({
     ok: true,
     task: {
       id: updated.id,
       title: updated.title,
-      status: updated.status,
+      status: uiStatus,
       priority: updated.priority,
       brief: updated.brief,
       alertId: updated.alert_id,
@@ -1875,28 +1883,46 @@ app.get('/api/tasks/open-portfolio', async (req, res) => {
     return res.json({ tasks: [], source: 'empty', fetchedAt: new Date().toISOString() })
   }
   const limit = Math.min(Math.max(Number((req.query as any).limit || 25), 1), 100)
+  // Exclude snoozed-until-future blocked rows so they leave the open queue.
+  const now = new Date().toISOString()
   const { data: tasks, error } = await supabaseAdmin
     .from('seo_tasks')
     .select('id, title, status, priority, brief, alert_id, domain_id, created_at, updated_at, seo_domains(domain, name)')
     .in('status', ['queued', 'working', 'blocked'])
     .order('created_at', { ascending: false })
-    .limit(limit)
+    .limit(Math.min(limit * 4, 200))
   if (error) return res.status(500).json({ error: error.message })
+
+  const open = (tasks || []).filter((t: any) => {
+    const brief = String(t.brief || '')
+    const m = brief.match(/\[SNOOZED until ([^\]]+)\]/)
+    if (!m) return t.status !== 'blocked' || !brief.includes('[SNOOZED until')
+    try {
+      return new Date(m[1]).getTime() <= Date.now()
+    } catch {
+      return true
+    }
+  }).slice(0, limit)
+
   res.json({
-    tasks: (tasks || []).map((t: any) => ({
-      id: t.id,
-      title: t.title,
-      status: t.status,
-      priority: t.priority,
-      brief: t.brief,
-      alertId: t.alert_id,
-      domain: t.seo_domains?.domain || null,
-      domainName: t.seo_domains?.name || null,
-      createdAt: t.created_at,
-      updatedAt: t.updated_at,
-    })),
+    tasks: open.map((t: any) => {
+      const brief = String(t.brief || '')
+      const snoozed = t.status === 'blocked' && brief.includes('[SNOOZED until')
+      return {
+        id: t.id,
+        title: t.title,
+        status: snoozed ? 'snoozed' : t.status,
+        priority: t.priority,
+        brief: t.brief,
+        alertId: t.alert_id,
+        domain: t.seo_domains?.domain || null,
+        domainName: t.seo_domains?.name || null,
+        createdAt: t.created_at,
+        updatedAt: t.updated_at,
+      }
+    }),
     source: 'supabase',
-    fetchedAt: new Date().toISOString(),
+    fetchedAt: now,
   })
 })
 

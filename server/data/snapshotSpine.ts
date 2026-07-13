@@ -154,9 +154,9 @@ export function buildSnapshotOverlayMap(
       }
     }
 
-    // Prefer durable open alerts from table when present
+    // Prefer durable open alerts/tasks from tables; do NOT invent task totals from alerts.
     const alertCount = openAlertCounts.get(domainId) ?? alertSnapshotCount
-    const taskCount = openTaskCounts.get(domainId) ?? Math.max(0, alertCount)
+    const taskCount = openTaskCounts.get(domainId) ?? 0
     const lastFetchedAt = sorted[0]?.fetched_at || null
     const meta = domainMeta.get(domainId)
 

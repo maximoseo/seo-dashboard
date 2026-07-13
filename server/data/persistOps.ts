@@ -163,14 +163,28 @@ export async function loadOpenCounts(admin: SupabaseClient, domainIds: string[])
     alertCounts.set(row.domain_id, (alertCounts.get(row.domain_id) || 0) + 1)
   }
 
+  // Snoozed rows are stored as status=blocked + brief tag `[SNOOZED until …]`
+  // and must not inflate open-task KPIs until the snooze expires.
   const { data: tasks } = await admin
     .from('seo_tasks')
-    .select('domain_id, status')
+    .select('domain_id, status, brief')
     .in('domain_id', domainIds)
     .in('status', ['queued', 'working', 'blocked'])
 
+  const now = Date.now()
   for (const row of tasks || []) {
     if (!row.domain_id) continue
+    const brief = String((row as any).brief || '')
+    const m = brief.match(/\[SNOOZED until ([^\]]+)\]/)
+    if (m) {
+      try {
+        if (new Date(m[1]).getTime() > now) continue // still snoozed
+      } catch {
+        // malformed tag → treat as open
+      }
+    } else if (row.status === 'blocked' && brief.includes('[SNOOZED until')) {
+      continue
+    }
     taskCounts.set(row.domain_id, (taskCounts.get(row.domain_id) || 0) + 1)
   }
 
