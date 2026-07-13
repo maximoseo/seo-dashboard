@@ -142,8 +142,94 @@ export function keywordsFromDataForSEO(payload: any): KeywordRow[] {
   return out.filter((r) => r.keyword)
 }
 
+/** Serpstat domain keywords / v4 result payload */
+export function keywordsFromSerpstat(payload: any): KeywordRow[] {
+  const data = payload?.result?.data || payload?.data || payload
+  const list = Array.isArray(data) ? data : Array.isArray(data?.data) ? data.data : []
+  if (!Array.isArray(list)) return []
+  return list.map((item: any) => ({
+    keyword: str(item.keyword || item.kw || item.query) || '',
+    position: num(item.position ?? item.pos ?? item.rank),
+    previousPosition: num(item.previous_position ?? item.prev_pos),
+    volume: num(item.region_queries_count ?? item.volume ?? item.search_volume ?? item.region_queries_count_wide),
+    difficulty: num(item.difficulty ?? item.concurrency ?? item.competition),
+    traffic: num(item.traff ?? item.traffic),
+    url: str(item.url),
+    cpc: num(item.cost ?? item.cpc),
+    trend: null,
+    source: 'serpstat',
+  })).filter((r: KeywordRow) => r.keyword)
+}
+
+/** Keywords Everywhere get_keyword_data response */
+export function keywordsFromKeywordsEverywhere(payload: any): KeywordRow[] {
+  const list = payload?.data || payload
+  if (!Array.isArray(list)) return []
+  return list.map((item: any) => ({
+    keyword: str(item.keyword || item.kw) || '',
+    position: null,
+    previousPosition: null,
+    volume: num(item.vol ?? item.volume ?? item.search_volume),
+    difficulty: num(item.competition ?? item.comp),
+    traffic: null,
+    url: null,
+    cpc: num(typeof item.cpc === 'object' ? item.cpc?.value : item.cpc),
+    trend: null,
+    source: 'keywords_everywhere',
+  })).filter((r: KeywordRow) => r.keyword)
+}
+
+/** Optional organic results from SerpAPI (title used only as weak keyword signal when needed) */
+export function keywordsFromSerpApi(payload: any): KeywordRow[] {
+  const list = payload?.organic_results || []
+  if (!Array.isArray(list)) return []
+  return list.map((item: any) => ({
+    keyword: str(item.title) || '',
+    position: num(item.position ?? item.rank),
+    previousPosition: null,
+    volume: null,
+    difficulty: null,
+    traffic: null,
+    url: str(item.link ?? item.url),
+    cpc: null,
+    trend: null,
+    source: 'serpapi',
+  })).filter((r: KeywordRow) => r.keyword || r.url)
+}
+
+export function competitorsFromSerpstat(payload: any): CompetitorRow[] {
+  const data = payload?.result?.data || payload?.data || payload
+  const list = Array.isArray(data) ? data : Array.isArray(data?.data) ? data.data : []
+  if (!Array.isArray(list)) return []
+  return list.map((item: any) => ({
+    domain: str(item.domain || item.Dn || item.url) || '',
+    commonKeywords: num(item.common_keywords ?? item.intersections ?? item.keywords),
+    traffic: num(item.traff ?? item.traffic ?? item.organic_traffic),
+    competitionLevel: num(item.relevance ?? item.competition),
+    relevance: num(item.relevance ?? item.competition),
+    topCountry: null,
+    source: 'serpstat',
+  })).filter((r: CompetitorRow) => r.domain)
+}
+
+export function backlinksFromSerpstat(payload: any): BacklinkStat {
+  const data = payload?.result?.data || payload?.result || payload?.data || payload || {}
+  const row = Array.isArray(data) ? data[0] : data
+  return {
+    backlinks: num(row?.backlinks ?? row?.total_backlinks ?? row?.backlinks_count),
+    refDomains: num(row?.refdomains ?? row?.referring_domains ?? row?.domains),
+    domainRating: num(row?.domain_rank ?? row?.dr ?? row?.trust_score),
+    dofollow: num(row?.dofollow ?? row?.follow),
+    nofollow: num(row?.nofollow),
+    source: 'serpstat',
+  }
+}
+
 /** Merge multi-source keywords; prefer first non-null fields; SEMrush > Ahrefs > DFS for Israel volume context when present. */
-export function mergeKeywordRows(groups: KeywordRow[][], preferredSources: string[] = ['semrush', 'ahrefs', 'dataforseo']): KeywordRow[] {
+export function mergeKeywordRows(
+  groups: KeywordRow[][],
+  preferredSources: string[] = ['semrush', 'ahrefs', 'dataforseo', 'serpstat', 'keywords_everywhere', 'serpapi'],
+): KeywordRow[] {
   const map = new Map<string, KeywordRow>()
   const order = new Map(preferredSources.map((s, i) => [s, i]))
   const sortedGroups = [...groups].sort((a, b) => {

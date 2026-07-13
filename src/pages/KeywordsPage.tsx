@@ -1,9 +1,13 @@
 import { useState, useMemo } from 'react'
 import { motion } from 'framer-motion'
-import { useKeywords } from '../api/client'
+import { useQueryClient } from '@tanstack/react-query'
+import { useKeywords, refreshKeywords } from '../api/client'
 import { useSEO } from '@/contexts/SEOContext'
 import { useProject } from '@/contexts/ProjectContext'
 import DataStateBadge from '@/components/DataStateBadge'
+import PageSizeSelect from '@/components/PageSizeSelect'
+import SyncButton from '@/components/SyncButton'
+import { usePageSize } from '@/hooks/usePageSize'
 import { normalizeSemrushKeywords, normalizeAhrefsKeywords, normalizeDataForSEOKeywords, formatMetric } from '../api/normalize'
 import { exportToCSV, ExportCSVButton } from '@/lib/csvExport'
 
@@ -23,10 +27,6 @@ interface Keyword {
   trend: number[]
   traffic: number
 }
-
-// Mock data removed — now fetching from API via useKeywords hook
-
-const ITEMS_PER_PAGE = 10
 
 function getDifficultyColor(d: number) {
   if (d < 30) return '#22C55E'
@@ -74,11 +74,27 @@ export default function KeywordsPage() {
   const [sortKey, setSortKey] = useState<SortKey>('position')
   const [sortDir, setSortDir] = useState<SortDir>('asc')
   const [page, setPage] = useState(1)
+  const [syncing, setSyncing] = useState(false)
+  const { pageSize, setPageSize } = usePageSize('keywords')
+  const qc = useQueryClient()
 
   const { domain } = useSEO()
   const { activeProject } = useProject()
   const projectMarket = activeProject?.market || null
-  const { data: apiData, isLoading, error, refetch, dataUpdatedAt, isFetching } = useKeywords(domain, projectMarket)
+  const { data: apiData, isLoading, error, dataUpdatedAt, isFetching } = useKeywords(domain, projectMarket)
+
+  const handleForceSync = async () => {
+    if (!domain) return
+    setSyncing(true)
+    try {
+      const fresh = await refreshKeywords(domain, projectMarket)
+      qc.setQueryData(['keywords', domain, projectMarket?.trim() || ''], fresh)
+    } catch {
+      // keep existing cache on network fail
+    } finally {
+      setSyncing(false)
+    }
+  }
 
   // Normalize API data from multiple sources
   const keywords: Keyword[] = useMemo(() => {
@@ -166,6 +182,7 @@ export default function KeywordsPage() {
   }, [apiData])
 
   const movements = apiData?.movements || null
+  const activeSources: string[] = Array.isArray(apiData?.activeSources) ? apiData.activeSources : []
   const softDegraded = Array.isArray(apiData?.softDegraded) ? apiData.softDegraded : []
   const marketLabel = apiData?.market?.label || null
   const lastFetchedLabel = apiData?.fetchedAt
@@ -192,8 +209,8 @@ export default function KeywordsPage() {
     return data
   }, [search, posFilter, intentFilter, sortKey, sortDir, keywords])
 
-  const totalPages = Math.max(1, Math.ceil(filtered.length / ITEMS_PER_PAGE))
-  const paginated = filtered.slice((page - 1) * ITEMS_PER_PAGE, page * ITEMS_PER_PAGE)
+  const totalPages = Math.max(1, Math.ceil(filtered.length / pageSize))
+  const paginated = filtered.slice((page - 1) * pageSize, page * pageSize)
 
   const handleSort = (key: SortKey) => {
     if (sortKey === key) setSortDir(d => d === 'asc' ? 'desc' : 'asc')
@@ -229,29 +246,21 @@ export default function KeywordsPage() {
         </div>
         <div className="flex gap-1.5 flex-wrap items-center">
           <ExportCSVButton onClick={handleExport} />
-          <button
-            type="button"
-            onClick={() => refetch()}
-            disabled={isFetching}
-            className="rounded-lg border border-border px-3 py-1.5 text-xs text-fg-muted hover:border-border-light hover:text-fg transition-colors touch-target-reset disabled:opacity-50"
-          >
-            {isFetching ? 'Refreshing…' : 'Force refresh'}
-          </button>
+          <SyncButton onClick={handleForceSync} loading={syncing || isFetching} label="Force refresh" loadingLabel="Syncing…" />
           <DataStateBadge
-            state={error ? 'unavailable' : keywords.length > 0 ? 'live' : isLoading ? 'cached' : 'unavailable'}
-            source={domain}
+            state={error ? 'unavailable' : keywords.length > 0 ? (apiData?.dataState === 'cached' ? 'cached' : 'live') : isLoading ? 'loading' : 'unavailable'}
+            source={activeSources.join(', ') || domain}
             fetchedAt={apiData?.fetchedAt || (dataUpdatedAt ? new Date(dataUpdatedAt).toISOString() : null)}
           />
           {marketLabel && (
             <span className="text-[10px] md:text-xs bg-blue-500/20 text-blue-300 border border-blue-500/30 px-1.5 md:px-2 py-0.5 md:py-1 rounded touch-target-reset">Market: {marketLabel}</span>
           )}
+          {activeSources.map((src: string) => (
+            <span key={`src-${src}`} className="text-[10px] md:text-xs bg-accent/10 text-accent-light border border-accent/20 px-1.5 md:px-2 py-0.5 md:py-1 rounded touch-target-reset">{src}</span>
+          ))}
           {softDegraded.map((src: string) => (
             <span key={`soft-${src}`} className="text-[10px] md:text-xs bg-amber-500/20 text-amber-300 border border-amber-500/30 px-1.5 md:px-2 py-0.5 md:py-1 rounded touch-target-reset">{src} soft-degraded</span>
           ))}
-          <span className="text-[10px] md:text-xs bg-orange-500/20 text-orange-300 border border-orange-500/30 px-1.5 md:px-2 py-0.5 md:py-1 rounded touch-target-reset">Ahrefs</span>
-          <span className="text-[10px] md:text-xs bg-orange-400/20 text-orange-200 border border-orange-400/30 px-1.5 md:px-2 py-0.5 md:py-1 rounded touch-target-reset">SEMrush</span>
-          <span className="text-[10px] md:text-xs bg-purple-500/20 text-purple-300 border border-purple-500/30 px-1.5 md:px-2 py-0.5 md:py-1 rounded touch-target-reset">DataForSEO</span>
-          <span className="text-[10px] md:text-xs bg-cyan-500/20 text-cyan-300 border border-cyan-500/30 px-1.5 md:px-2 py-0.5 md:py-1 rounded touch-target-reset">SE Ranking</span>
         </div>
       </div>
 
@@ -331,7 +340,7 @@ export default function KeywordsPage() {
               className="w-full pl-9 pr-3 py-2.5 rounded-lg bg-bg-darkest border border-border text-sm text-fg placeholder:text-fg-dim focus:outline-none focus:border-accent transition-colors"
             />
           </div>
-          <div className="flex gap-2">
+          <div className="flex gap-2 flex-wrap items-center">
             <select
               value={posFilter}
               onChange={e => { setPosFilter(e.target.value); setPage(1) }}
@@ -354,6 +363,11 @@ export default function KeywordsPage() {
             <option value="transactional">Transactional</option>
             <option value="navigational">Navigational</option>
           </select>
+            <PageSizeSelect
+              value={pageSize}
+              onChange={(n) => { setPageSize(n); setPage(1) }}
+              compact
+            />
           </div>
         </div>
       </motion.div>
@@ -485,35 +499,31 @@ export default function KeywordsPage() {
         )}
 
         {/* Pagination */}
-        <div className="flex items-center justify-between px-4 md:px-5 py-3 border-t border-border">
+        <div className="flex items-center justify-between px-4 md:px-5 py-3 border-t border-border gap-2 flex-wrap">
           <p className="text-[11px] md:text-xs text-fg-dim">
-            {(page - 1) * ITEMS_PER_PAGE + 1}–{Math.min(page * ITEMS_PER_PAGE, filtered.length)} of {filtered.length}
+            {filtered.length === 0 ? '0 of 0' : `${(page - 1) * pageSize + 1}–${Math.min(page * pageSize, filtered.length)} of ${filtered.length}`}
           </p>
-          <div className="flex items-center gap-0.5 md:gap-1">
+          <div className="flex items-center gap-1">
+            <PageSizeSelect
+              className="hidden sm:inline-flex mr-2"
+              value={pageSize}
+              onChange={(n) => { setPageSize(n); setPage(1) }}
+              compact
+            />
             <button
               onClick={() => setPage(p => Math.max(1, p - 1))}
               disabled={page === 1}
               className="px-2 md:px-2.5 py-1.5 rounded-lg text-xs font-medium text-fg-muted hover:text-fg hover:bg-white/[0.04] disabled:opacity-30 disabled:cursor-not-allowed transition-colors touch-target-reset"
             >
-              {'\u2190'}
+              ← Prev
             </button>
-            {Array.from({ length: totalPages }, (_, i) => i + 1).map(p => (
-              <button
-                key={p}
-                onClick={() => setPage(p)}
-                className={`w-8 h-8 rounded-lg text-xs font-medium transition-colors touch-target-reset ${
-                  page === p ? 'bg-accent text-white' : 'text-fg-muted hover:text-fg hover:bg-white/[0.04]'
-                }`}
-              >
-                {p}
-              </button>
-            ))}
+            <span className="text-xs text-fg-muted px-2">{page}/{totalPages}</span>
             <button
               onClick={() => setPage(p => Math.min(totalPages, p + 1))}
               disabled={page === totalPages}
               className="px-2 md:px-2.5 py-1.5 rounded-lg text-xs font-medium text-fg-muted hover:text-fg hover:bg-white/[0.04] disabled:opacity-30 disabled:cursor-not-allowed transition-colors touch-target-reset"
             >
-              {'\u2192'}
+              Next →
             </button>
           </div>
         </div>

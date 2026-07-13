@@ -1,9 +1,13 @@
 import { useState, useMemo } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { useQuery } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useSEO } from '@/contexts/SEOContext'
 import { authFetch } from '@/lib/authToken'
 import DataStateBadge from '@/components/DataStateBadge'
+import PageSizeSelect from '@/components/PageSizeSelect'
+import SyncButton from '@/components/SyncButton'
+import { usePageSize } from '@/hooks/usePageSize'
+import { refreshAlerts } from '@/api/client'
 
 type Severity = 'critical' | 'warning' | 'info'
 type AlertStatus = 'unread' | 'read' | 'resolved'
@@ -77,7 +81,11 @@ const severityConfig = {
 
 export default function AlertsPage() {
   const { domain } = useSEO()
-  const { data, isLoading, error, refetch } = useQuery({
+  const qc = useQueryClient()
+  const { pageSize, setPageSize } = usePageSize('alerts')
+  const [page, setPage] = useState(1)
+  const [syncing, setSyncing] = useState(false)
+  const { data, isLoading, error, isFetching, dataUpdatedAt } = useQuery({
     queryKey: ['alerts', domain],
     queryFn: () => fetchAlerts(domain),
     staleTime: 2 * 60 * 1000,
@@ -110,6 +118,22 @@ export default function AlertsPage() {
     return result.sort((a, b) => b.timestamp - a.timestamp)
   }, [alerts, severityFilter, moduleFilter, search])
 
+  const totalPages = Math.max(1, Math.ceil(filtered.length / pageSize))
+  const paginated = filtered.slice((page - 1) * pageSize, page * pageSize)
+
+  const handleForceSync = async () => {
+    if (!domain) return
+    setSyncing(true)
+    try {
+      const fresh = await refreshAlerts(domain)
+      qc.setQueryData(['alerts', domain], fresh)
+    } catch {
+      // keep cache
+    } finally {
+      setSyncing(false)
+    }
+  }
+
   const markAs = (_id: string, _status: AlertStatus) => {
     // Local-only state update (could be persisted to API later)
   }
@@ -130,9 +154,10 @@ export default function AlertsPage() {
           <h2 className="text-base md:text-lg font-semibold text-fg">Alerts & Notifications</h2>
           <p className="text-xs md:text-sm text-fg-muted mt-0.5">Aggregated alerts from all monitoring sources for {domain}</p>
         </div>
-        <div className="flex gap-2 items-center">
-          <DataStateBadge state={dataState} source={data?.source || 'rules'} />
-          <button onClick={() => refetch()} className="rounded-lg border border-border px-3 py-1.5 text-xs text-fg-muted hover:border-border-light hover:text-fg transition-colors touch-target-reset">Refresh</button>
+        <div className="flex gap-2 items-center flex-wrap">
+          <SyncButton onClick={handleForceSync} loading={syncing || isFetching} label="Force refresh" loadingLabel="Syncing…" />
+          <DataStateBadge state={dataState as any} source={data?.source || 'rules'} fetchedAt={dataUpdatedAt ? new Date(dataUpdatedAt).toISOString() : null} />
+          <PageSizeSelect value={pageSize} onChange={(n) => { setPageSize(n); setPage(1) }} compact />
         </div>
       </div>
 
@@ -151,15 +176,15 @@ export default function AlertsPage() {
         <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2.5 sm:gap-3">
           <div className="relative flex-1 min-w-0 sm:min-w-[200px]">
             <svg width="16" height="16" viewBox="0 0 16 16" fill="none" className="absolute left-3 top-1/2 -translate-y-1/2 text-fg-dim"><circle cx="7" cy="7" r="5" stroke="currentColor" strokeWidth="1.5" /><path d="M11 11l3 3" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" /></svg>
-            <input type="text" placeholder="Search alerts..." value={search} onChange={e => setSearch(e.target.value)} className="w-full pl-9 pr-3 py-2.5 rounded-lg bg-bg-darkest border border-border text-sm text-fg placeholder:text-fg-dim focus:outline-none focus:border-accent transition-colors" />
+            <input type="text" placeholder="Search alerts..." value={search} onChange={e => { setSearch(e.target.value); setPage(1) }} className="w-full pl-9 pr-3 py-2.5 rounded-lg bg-bg-darkest border border-border text-sm text-fg placeholder:text-fg-dim focus:outline-none focus:border-accent transition-colors" />
           </div>
-          <select value={severityFilter} onChange={e => setSeverityFilter(e.target.value)} className="px-3 py-2.5 rounded-lg bg-bg-darkest border border-border text-sm text-fg-muted focus:outline-none focus:border-accent transition-colors">
+          <select value={severityFilter} onChange={e => { setSeverityFilter(e.target.value); setPage(1) }} className="px-3 py-2.5 rounded-lg bg-bg-darkest border border-border text-sm text-fg-muted focus:outline-none focus:border-accent transition-colors">
             <option value="all">All Severity</option>
             <option value="critical">Critical</option>
             <option value="warning">Warning</option>
             <option value="info">Info</option>
           </select>
-          <select value={moduleFilter} onChange={e => setModuleFilter(e.target.value)} className="px-3 py-2.5 rounded-lg bg-bg-darkest border border-border text-sm text-fg-muted focus:outline-none focus:border-accent transition-colors">
+          <select value={moduleFilter} onChange={e => { setModuleFilter(e.target.value); setPage(1) }} className="px-3 py-2.5 rounded-lg bg-bg-darkest border border-border text-sm text-fg-muted focus:outline-none focus:border-accent transition-colors">
             <option value="all">All Modules</option>
             {modules.map(m => <option key={m} value={m}>{m}</option>)}
           </select>
@@ -173,7 +198,7 @@ export default function AlertsPage() {
           <div className="p-6 text-center">
             <p className="text-sm text-red-300">Failed to load alerts</p>
             <p className="text-xs text-fg-dim mt-1">{error instanceof Error ? error.message : 'API unavailable'}</p>
-            <button onClick={() => refetch()} className="mt-3 px-3 py-1.5 rounded-lg border border-accent/30 text-xs text-accent-light">Retry</button>
+            <button onClick={handleForceSync} className="mt-3 px-3 py-1.5 rounded-lg border border-accent/30 text-xs text-accent-light">Retry</button>
           </div>
         )}
         {!isLoading && !error && alerts.length === 0 && (
@@ -183,7 +208,7 @@ export default function AlertsPage() {
           </div>
         )}
         <div className="divide-y divide-border">
-          {filtered.map(alert => {
+          {paginated.map(alert => {
             const config = severityConfig[alert.severity]
             const isExpanded = expandedId === alert.id
             return (
@@ -224,6 +249,16 @@ export default function AlertsPage() {
               </div>
             )
           })}
+        </div>
+        <div className="flex items-center justify-between px-4 md:px-5 py-3 border-t border-border gap-2 flex-wrap">
+          <p className="text-[11px] text-fg-dim">
+            {filtered.length === 0 ? '0 of 0' : `${(page - 1) * pageSize + 1}–${Math.min(page * pageSize, filtered.length)} of ${filtered.length}`}
+          </p>
+          <div className="flex items-center gap-1">
+            <button onClick={() => setPage(p => Math.max(1, p - 1))} disabled={page === 1} className="px-2.5 py-1.5 rounded-lg text-xs text-fg-muted hover:text-fg disabled:opacity-30">← Prev</button>
+            <span className="text-xs text-fg-muted px-2">{page}/{totalPages}</span>
+            <button onClick={() => setPage(p => Math.min(totalPages, p + 1))} disabled={page >= totalPages} className="px-2.5 py-1.5 rounded-lg text-xs text-fg-muted hover:text-fg disabled:opacity-30">Next →</button>
+          </div>
         </div>
       </motion.div>
     </div>

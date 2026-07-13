@@ -1,11 +1,15 @@
 import { useState, useMemo } from 'react'
 import { motion } from 'framer-motion'
-import { useQuery } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { DataCard } from '@/components/DataCard'
 import DataStateBadge from '@/components/DataStateBadge'
+import PageSizeSelect from '@/components/PageSizeSelect'
+import SyncButton from '@/components/SyncButton'
+import { usePageSize } from '@/hooks/usePageSize'
 import { useSEO } from '@/contexts/SEOContext'
 import { useProject } from '@/contexts/ProjectContext'
 import { authFetch } from '@/lib/authToken'
+import { refreshCompetitors } from '@/api/client'
 
 interface Competitor {
   domain: string
@@ -124,7 +128,11 @@ export default function CompetitorsPage() {
   const { domain } = useSEO()
   const { activeProject } = useProject()
   const projectMarket = activeProject?.market || null
-  const { data, isLoading, error, refetch } = useQuery({
+  const qc = useQueryClient()
+  const { pageSize, setPageSize } = usePageSize('competitors')
+  const [page, setPage] = useState(1)
+  const [syncing, setSyncing] = useState(false)
+  const { data, isLoading, error, isFetching } = useQuery({
     queryKey: ['competitors', domain, projectMarket],
     queryFn: () => fetchCompetitors(domain, projectMarket),
     staleTime: 10 * 60 * 1000,
@@ -150,7 +158,23 @@ export default function CompetitorsPage() {
     return list
   }, [competitors, search, sortKey])
 
-  const dataState = error ? 'unavailable' : competitors.length > 0 ? 'live' : isLoading ? 'loading' : 'unavailable'
+  const totalPages = Math.max(1, Math.ceil(filtered.length / pageSize))
+  const paginated = filtered.slice((page - 1) * pageSize, page * pageSize)
+
+  const handleForceSync = async () => {
+    if (!domain) return
+    setSyncing(true)
+    try {
+      const fresh = await refreshCompetitors(domain, projectMarket)
+      qc.setQueryData(['competitors', domain, projectMarket], fresh)
+    } catch {
+      // keep cache
+    } finally {
+      setSyncing(false)
+    }
+  }
+
+  const dataState = error ? 'unavailable' : competitors.length > 0 ? (data?.dataState === 'cached' ? 'cached' : 'live') : isLoading ? 'loading' : 'unavailable'
 
   const summaryCards = [
     { label: 'Competitors', value: competitors.length, color: 'text-fg' },
@@ -166,9 +190,10 @@ export default function CompetitorsPage() {
           <h2 className="text-base md:text-lg font-semibold text-fg">Competitors</h2>
           <p className="text-xs md:text-sm text-fg-muted mt-0.5">Competitor discovery and gap analysis for {domain}</p>
         </div>
-        <div className="flex gap-2 items-center">
-          <DataStateBadge state={dataState} source={activeSources.join(', ') || 'aggregated'} />
-          <button onClick={() => refetch()} className="rounded-lg border border-border px-3 py-1.5 text-xs text-fg-muted hover:border-border-light hover:text-fg transition-colors touch-target-reset">Refresh</button>
+        <div className="flex gap-2 items-center flex-wrap">
+          <SyncButton onClick={handleForceSync} loading={syncing || isFetching} label="Force refresh" loadingLabel="Syncing…" />
+          <DataStateBadge state={dataState as any} source={activeSources.join(', ') || 'aggregated'} fetchedAt={data?.fetchedAt || null} />
+          <PageSizeSelect value={pageSize} onChange={(n) => { setPageSize(n); setPage(1) }} compact />
         </div>
       </div>
 
@@ -221,7 +246,7 @@ export default function CompetitorsPage() {
         <div className="flex flex-col sm:flex-row gap-2.5 sm:gap-3 mb-4">
           <div className="relative flex-1">
             <svg width="16" height="16" viewBox="0 0 16 16" fill="none" className="absolute left-3 top-1/2 -translate-y-1/2 text-fg-dim"><circle cx="7" cy="7" r="5" stroke="currentColor" strokeWidth="1.5" /><path d="M11 11l3 3" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" /></svg>
-            <input type="text" placeholder="Search competitor domain..." value={search} onChange={e => setSearch(e.target.value)} className="w-full pl-9 pr-3 py-2.5 rounded-lg bg-bg-darkest border border-border text-sm text-fg placeholder:text-fg-dim focus:outline-none focus:border-accent transition-colors" />
+            <input type="text" placeholder="Search competitor domain..." value={search} onChange={e => { setSearch(e.target.value); setPage(1) }} className="w-full pl-9 pr-3 py-2.5 rounded-lg bg-bg-darkest border border-border text-sm text-fg placeholder:text-fg-dim focus:outline-none focus:border-accent transition-colors" />
           </div>
           <select value={sortKey} onChange={e => setSortKey(e.target.value as any)} className="px-3 py-2.5 rounded-lg bg-bg-darkest border border-border text-sm text-fg-muted focus:outline-none focus:border-accent transition-colors">
             <option value="traffic">Sort by Traffic</option>
@@ -235,7 +260,7 @@ export default function CompetitorsPage() {
           <div className="text-center py-8">
             <p className="text-sm text-red-300">Failed to load competitors</p>
             <p className="text-xs text-fg-dim mt-1">{error instanceof Error ? error.message : 'API unavailable'}</p>
-            <button onClick={() => refetch()} className="mt-3 px-3 py-1.5 rounded-lg border border-accent/30 text-xs text-accent-light">Retry</button>
+            <button onClick={handleForceSync} className="mt-3 px-3 py-1.5 rounded-lg border border-accent/30 text-xs text-accent-light">Retry</button>
           </div>
         )}
         {!isLoading && !error && competitors.length === 0 && (
@@ -247,14 +272,14 @@ export default function CompetitorsPage() {
 
         {/* Mobile card view */}
         <div className="md:hidden space-y-3">
-          {filtered.map((comp, i) => (
+          {paginated.map((comp, i) => (
             <div key={comp.domain} className="rounded-xl border border-border bg-bg-darkest p-3.5">
               <div className="flex items-start justify-between">
                 <div>
                   <p className="text-sm font-medium text-fg">{comp.domain}</p>
                   <p className="text-xs text-fg-dim mt-0.5">{comp.source}</p>
                 </div>
-                <span className="text-xs text-accent-light">#{i + 1}</span>
+                <span className="text-xs text-accent-light">#{(page - 1) * pageSize + i + 1}</span>
               </div>
               <div className="grid grid-cols-3 gap-2 mt-3">
                 <div><p className="text-[10px] text-fg-dim">Keywords</p><p className="text-sm font-semibold text-fg">{comp.commonKeywords.toLocaleString()}</p></div>
@@ -279,9 +304,9 @@ export default function CompetitorsPage() {
               </tr>
             </thead>
             <tbody>
-              {filtered.map((comp, i) => (
+              {paginated.map((comp, i) => (
                 <tr key={comp.domain} className="border-t border-border hover:bg-white/[0.02] transition-colors">
-                  <td className="py-3 px-4 text-fg-dim">{i + 1}</td>
+                  <td className="py-3 px-4 text-fg-dim">{(page - 1) * pageSize + i + 1}</td>
                   <td className="py-3 px-4">
                     <span className="text-fg font-medium">{comp.domain}</span>
                     {comp.topCountry && <span className="ml-2 text-[10px] px-1.5 py-0.5 rounded bg-white/[0.06] text-fg-dim">{comp.topCountry}</span>}
@@ -295,6 +320,17 @@ export default function CompetitorsPage() {
             </tbody>
           </table>
         </div>
+        <div className="flex items-center justify-between pt-3 mt-3 border-t border-border gap-2 flex-wrap">
+          <p className="text-[11px] text-fg-dim">
+            {filtered.length === 0 ? '0 of 0' : `${(page - 1) * pageSize + 1}–${Math.min(page * pageSize, filtered.length)} of ${filtered.length}`}
+          </p>
+          <div className="flex items-center gap-1">
+            <button onClick={() => setPage(p => Math.max(1, p - 1))} disabled={page === 1} className="px-2.5 py-1.5 rounded-lg text-xs text-fg-muted hover:text-fg disabled:opacity-30">← Prev</button>
+            <span className="text-xs text-fg-muted px-2">{page}/{totalPages}</span>
+            <button onClick={() => setPage(p => Math.min(totalPages, p + 1))} disabled={page >= totalPages} className="px-2.5 py-1.5 rounded-lg text-xs text-fg-muted hover:text-fg disabled:opacity-30">Next →</button>
+          </div>
+        </div>
+
       </DataCard>
     </div>
   )

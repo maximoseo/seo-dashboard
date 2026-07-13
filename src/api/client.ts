@@ -6,7 +6,9 @@ const API_BASE = import.meta.env.VITE_API_URL || ''
 
 async function fetchAPI(endpoint: string, params?: Record<string, string>) {
   const url = new URL(`${API_BASE}/api/${endpoint}`, window.location.origin)
-  if (params) Object.entries(params).forEach(([k, v]) => url.searchParams.set(k, v))
+  if (params) Object.entries(params).forEach(([k, v]) => {
+    if (v !== undefined && v !== null && v !== '') url.searchParams.set(k, v)
+  })
 
   const res = await authFetch(url)
   if (!res.ok) throw new Error(`${endpoint} failed: ${res.status}`)
@@ -36,13 +38,82 @@ export function useKeywords(domain: string | null, market?: string | null) {
   return useQuery({
     queryKey: ['keywords', domain, marketParam],
     queryFn: async () => {
-      const params: Record<string, string> = { domain: domain!, limit: '50' }
+      const params: Record<string, string> = { domain: domain!, limit: '100' }
       if (marketParam) params.market = marketParam
       return fetchAPI('keywords/aggregated', params)
     },
     enabled: !!domain,
     staleTime: 10 * 60 * 1000,
   })
+}
+
+/** Force live re-fetch of keywords (bypasses server snapshot). */
+export async function refreshKeywords(domain: string, market?: string | null) {
+  const params: Record<string, string> = { domain, limit: '100', refresh: '1' }
+  if (market?.trim()) params.market = market.trim()
+  return fetchAPI('keywords/aggregated', params)
+}
+
+export function usePages(domain: string | null, market?: string | null) {
+  const marketParam = market?.trim() || ''
+  return useQuery({
+    queryKey: ['pages', domain, marketParam],
+    queryFn: async () => {
+      const params: Record<string, string> = { domain: domain!, limit: '100' }
+      if (marketParam) params.market = marketParam
+      return fetchAPI('pages/aggregated', params)
+    },
+    enabled: !!domain,
+    staleTime: 10 * 60 * 1000,
+  })
+}
+
+/** Force live re-fetch of top pages. */
+export async function refreshPages(domain: string, market?: string | null) {
+  const params: Record<string, string> = { domain, limit: '100', refresh: '1' }
+  if (market?.trim()) params.market = market.trim()
+  return fetchAPI('pages/aggregated', params)
+}
+
+export function useBacklinksAgg(domain: string | null, market?: string | null) {
+  const marketParam = market?.trim() || ''
+  return useQuery({
+    queryKey: ['backlinks', domain, marketParam],
+    queryFn: async () => {
+      const params: Record<string, string> = { domain: domain! }
+      if (marketParam) params.market = marketParam
+      return fetchAPI('backlinks/aggregated', params)
+    },
+    enabled: !!domain,
+    staleTime: 10 * 60 * 1000,
+  })
+}
+
+/** Force live re-fetch of backlinks aggregate. */
+export async function refreshBacklinks(domain: string, market?: string | null) {
+  const params: Record<string, string> = { domain, refresh: '1' }
+  if (market?.trim()) params.market = market.trim()
+  return fetchAPI('backlinks/aggregated', params)
+}
+
+export function useCompetitors(domain: string | null, market?: string | null) {
+  const marketParam = market?.trim() || ''
+  return useQuery({
+    queryKey: ['competitors', domain, marketParam],
+    queryFn: async () => {
+      const params: Record<string, string> = { domain: domain! }
+      if (marketParam) params.market = marketParam
+      return fetchAPI('competitors/aggregated', params)
+    },
+    enabled: !!domain,
+    staleTime: 10 * 60 * 1000,
+  })
+}
+
+export async function refreshCompetitors(domain: string, market?: string | null) {
+  const params: Record<string, string> = { domain, refresh: '1' }
+  if (market?.trim()) params.market = market.trim()
+  return fetchAPI('competitors/aggregated', params)
 }
 
 export function useAlerts(domain: string | null) {
@@ -52,4 +123,8 @@ export function useAlerts(domain: string | null) {
     enabled: !!domain,
     staleTime: 2 * 60 * 1000,
   })
+}
+
+export async function refreshAlerts(domain: string) {
+  return fetchAPI('alerts/aggregated', { domain, refresh: '1' })
 }

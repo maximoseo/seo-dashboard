@@ -8,6 +8,12 @@ export type MarketPack = {
   dfsLanguageCode: string
   serpLanguage: string
   country: string
+  /** Serpstat search engine code, e.g. g_il / g_us */
+  serpstatSe: string
+  /** Keywords Everywhere + SerpAPI country/gl code */
+  keCountry: string
+  serpapiGl: string
+  serpapiHl: string
 }
 
 const MARKETS: Record<string, MarketPack> = {
@@ -21,6 +27,10 @@ const MARKETS: Record<string, MarketPack> = {
     dfsLanguageCode: 'he',
     serpLanguage: 'he',
     country: 'IL',
+    serpstatSe: 'g_il',
+    keCountry: 'il',
+    serpapiGl: 'il',
+    serpapiHl: 'iw',
   },
   us: {
     code: 'us',
@@ -32,6 +42,10 @@ const MARKETS: Record<string, MarketPack> = {
     dfsLanguageCode: 'en',
     serpLanguage: 'en',
     country: 'US',
+    serpstatSe: 'g_us',
+    keCountry: 'us',
+    serpapiGl: 'us',
+    serpapiHl: 'en',
   },
   global: {
     code: 'global',
@@ -43,6 +57,10 @@ const MARKETS: Record<string, MarketPack> = {
     dfsLanguageCode: 'en',
     serpLanguage: 'en',
     country: 'US',
+    serpstatSe: 'g_us',
+    keCountry: 'us',
+    serpapiGl: 'us',
+    serpapiHl: 'en',
   },
 }
 

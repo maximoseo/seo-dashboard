@@ -18,8 +18,14 @@ out/
 # IDE
 .vscode/
 .idea/
+.cursor/
 *.swp
 *.swo
+
+# Test artifacts
+test-results/
+playwright-report/
+blob-report/
 
 # OS
 .DS_Store
