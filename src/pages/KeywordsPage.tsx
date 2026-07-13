@@ -78,7 +78,7 @@ export default function KeywordsPage() {
   const { domain } = useSEO()
   const { activeProject } = useProject()
   const projectMarket = activeProject?.market || null
-  const { data: apiData, isLoading, error } = useKeywords(domain, projectMarket)
+  const { data: apiData, isLoading, error, refetch, dataUpdatedAt, isFetching } = useKeywords(domain, projectMarket)
 
   // Normalize API data from multiple sources
   const keywords: Keyword[] = useMemo(() => {
@@ -168,6 +168,11 @@ export default function KeywordsPage() {
   const movements = apiData?.movements || null
   const softDegraded = Array.isArray(apiData?.softDegraded) ? apiData.softDegraded : []
   const marketLabel = apiData?.market?.label || null
+  const lastFetchedLabel = apiData?.fetchedAt
+    ? new Date(apiData.fetchedAt).toLocaleString()
+    : dataUpdatedAt
+      ? new Date(dataUpdatedAt).toLocaleString()
+      : null
 
   const filtered = useMemo(() => {
     let data = [...keywords]
@@ -224,12 +229,24 @@ export default function KeywordsPage() {
         </div>
         <div className="flex gap-1.5 flex-wrap items-center">
           <ExportCSVButton onClick={handleExport} />
-          <DataStateBadge state={error ? 'unavailable' : keywords.length > 0 ? 'live' : isLoading ? 'cached' : 'unavailable'} source={domain} />
+          <button
+            type="button"
+            onClick={() => refetch()}
+            disabled={isFetching}
+            className="rounded-lg border border-border px-3 py-1.5 text-xs text-fg-muted hover:border-border-light hover:text-fg transition-colors touch-target-reset disabled:opacity-50"
+          >
+            {isFetching ? 'Refreshing…' : 'Force refresh'}
+          </button>
+          <DataStateBadge
+            state={error ? 'unavailable' : keywords.length > 0 ? 'live' : isLoading ? 'cached' : 'unavailable'}
+            source={domain}
+            fetchedAt={apiData?.fetchedAt || (dataUpdatedAt ? new Date(dataUpdatedAt).toISOString() : null)}
+          />
           {marketLabel && (
             <span className="text-[10px] md:text-xs bg-blue-500/20 text-blue-300 border border-blue-500/30 px-1.5 md:px-2 py-0.5 md:py-1 rounded touch-target-reset">Market: {marketLabel}</span>
           )}
           {softDegraded.map((src: string) => (
-            <span key={`soft-${src}`} className="text-[10px] md:text-xs bg-amber-500/20 text-amber-300 border border-amber-500/30 px-1.5 md:px-2 py-0.5 md:py-1 rounded touch-target-reset">{src} soft</span>
+            <span key={`soft-${src}`} className="text-[10px] md:text-xs bg-amber-500/20 text-amber-300 border border-amber-500/30 px-1.5 md:px-2 py-0.5 md:py-1 rounded touch-target-reset">{src} soft-degraded</span>
           ))}
           <span className="text-[10px] md:text-xs bg-orange-500/20 text-orange-300 border border-orange-500/30 px-1.5 md:px-2 py-0.5 md:py-1 rounded touch-target-reset">Ahrefs</span>
           <span className="text-[10px] md:text-xs bg-orange-400/20 text-orange-200 border border-orange-400/30 px-1.5 md:px-2 py-0.5 md:py-1 rounded touch-target-reset">SEMrush</span>
@@ -237,6 +254,16 @@ export default function KeywordsPage() {
           <span className="text-[10px] md:text-xs bg-cyan-500/20 text-cyan-300 border border-cyan-500/30 px-1.5 md:px-2 py-0.5 md:py-1 rounded touch-target-reset">SE Ranking</span>
         </div>
       </div>
+
+      {softDegraded.length > 0 && (
+        <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 px-3.5 py-3 text-sm text-amber-100">
+          <p className="font-semibold">Provider soft-degrade</p>
+          <p className="mt-1 text-xs md:text-sm text-amber-100/90">
+            {softDegraded.join(', ')} returned auth/quota errors (often SE Ranking 403). Showing remaining live sources only — not silent empty data.
+          </p>
+          {lastFetchedLabel && <p className="mt-1 text-[11px] text-amber-100/70">Last fetched: {lastFetchedLabel}</p>}
+        </div>
+      )}
 
       {/* Keyword movements from normalized server rows */}
       {movements && (movements.improved?.length || movements.declined?.length || movements.newEntries?.length || movements.lost?.length) ? (

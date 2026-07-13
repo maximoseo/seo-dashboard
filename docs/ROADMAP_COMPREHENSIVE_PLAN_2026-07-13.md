@@ -207,17 +207,23 @@ Do **not** try to become a full AgencyAnalytics clone in one sprint.
 
 ---
 
-## 7. Immediate quick wins (if/when execution is approved)
+## 7. Immediate quick wins — status (2026-07-13 evening)
 
 Small, safe diffs with high operator value:
 
-1. **Market IL default** for `.co.il` domains in SEMrush/DataForSEO calls
-2. **Force-refresh + lastFetched** visible on Keywords / Competitors / Backlinks
-3. **Honest empty states** + hide demo arrays when `import.meta.env.PROD`
-4. **SE Ranking competitor** soft-degrade banner when 403 instead of silent empty
-5. **Reports validation UX** — schema-aligned body (sections) or UI error humanized
-6. **Command Center “close/snooze task”** loops to shrink 199 open tasks
-7. Nightly cron: `/api/sync` limited batch + digest to tomer@webs.co.il
+1. ✅ **Market IL default** for `.co.il` domains in SEMrush/DataForSEO (plus project.market propagation)
+2. ✅ **Force-refresh + lastFetched** on Keywords (badge + button); Competitors already had Refresh
+3. ✅ **Honest empty states** on Pages (no production demo crawl inventory)
+4. ✅ **SE Ranking soft-degrade banner** when provider returns 403/quota (Keywords + Competitors badges)
+5. ⏳ **Reports validation UX** — schema-aligned body (sections) or UI error humanized
+6. ⏳ **Command Center “close/snooze task”** loops to shrink open tasks
+7. ⏳ Nightly cron: `/api/sync` limited batch + digest to tomer@webs.co.il
+
+Also shipped with this pass:
+
+- ✅ Production dashboard auth secrets re-applied (login + `/api/projects` verified live)
+- ✅ Playwright smoke suite (`e2e/smoke.spec.ts`) + CI job on main (`e2e-smoke`)
+- ✅ Missing Vercel entrypoint `api/portfolio.ts`
 
 ---
 

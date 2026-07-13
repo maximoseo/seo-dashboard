@@ -78,6 +78,15 @@ export default function PagesPage() {
         </div>
       </div>
 
+      {livePages.length === 0 && (
+        <div className="rounded-xl border border-border bg-bg-card px-4 py-5 card-glow">
+          <p className="text-sm font-semibold text-fg">No crawl inventory yet</p>
+          <p className="mt-1 text-xs md:text-sm text-fg-muted">
+            Pages intentionally show a real empty state in production — demo page lists are disabled. Wire sitemap/crawl data before this module is treated as live.
+          </p>
+        </div>
+      )}
+
       {/* Summary Cards */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 md:gap-4">
         {summaryCards.map((card, i) => (
