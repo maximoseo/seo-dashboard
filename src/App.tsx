@@ -15,6 +15,7 @@ import { useKeyboardShortcuts } from '@/hooks/useKeyboardShortcuts'
 
 const ClientsPage = lazy(() => import('@/pages/ClientsPage'))
 const ProjectsIndexPage = lazy(() => import('@/pages/ProjectsIndexPage'))
+const CommandCenterPage = lazy(() => import('@/pages/CommandCenterPage'))
 const ProjectWorkspacePage = lazy(() => import('@/pages/project/ProjectWorkspacePage'))
 const ProjectOverviewPage = lazy(() => import('@/pages/project/ProjectOverviewPage'))
 const ProjectSettingsPage = lazy(() => import('@/pages/project/ProjectSettingsPage'))
@@ -32,7 +33,8 @@ const ReportsPage = lazy(() => import('@/pages/ReportsPage'))
 const SettingsPage = lazy(() => import('@/pages/SettingsPage'))
 
 const navRouteMap: Record<string, string> = {
-  Clients: '/clients',
+  Clients: '/projects',
+  'Command Center': '/command-center',
   Keywords: '/keywords',
   Backlinks: '/backlinks',
   Pages: '/pages',
@@ -70,6 +72,7 @@ const pageTitles: Record<string, { title: string; subtitle: string }> = {
   '/': { title: 'Projects / Sites', subtitle: 'Choose a site and open its full SEO workspace' },
   '/clients': { title: 'Clients / Domains', subtitle: 'Portfolio domain selector and monitoring status' },
   '/projects': { title: 'Projects / Sites', subtitle: 'Choose a site and open its full SEO workspace' },
+  '/command-center': { title: 'Command Center', subtitle: 'Portfolio KPIs, stale spine and operator sync' },
   '/keywords': { title: 'Keywords', subtitle: 'Track organic keyword rankings and opportunities' },
   '/backlinks': { title: 'Backlinks', subtitle: 'Analyze authority, risk, anchors and lost links' },
   '/pages': { title: 'Pages', subtitle: 'Technical SEO crawl inventory and page priorities' },
@@ -99,6 +102,7 @@ function LoadingScreen() {
 
 function getActiveNav(pathname: string): string {
   if (pathname === '/projects' || pathname === '/clients') return 'Clients'
+  if (pathname === '/command-center') return 'Command Center'
   if (pathname.startsWith('/projects/')) {
     const module = getModuleFromPathname(pathname)
     return module ? moduleNavMap[module] : 'Dashboard'
@@ -131,6 +135,12 @@ function DashboardShellInner() {
 
     if (name === 'Clients') {
       navigate('/projects')
+      setSidebarOpen(false)
+      return
+    }
+
+    if (name === 'Command Center') {
+      navigate('/command-center')
       setSidebarOpen(false)
       return
     }
@@ -184,6 +194,7 @@ function DashboardShellInner() {
                 <Route path="/" element={<Navigate to="/projects" replace />} />
                 <Route path="/clients" element={<ClientsPage />} />
                 <Route path="/projects" element={<ProjectsIndexPage />} />
+                <Route path="/command-center" element={<CommandCenterPage />} />
                 <Route path="/projects/:domain" element={<ProjectWorkspacePage />}>
                   <Route index element={<ProjectOverviewPage />} />
                   <Route path="keywords" element={<KeywordsPage />} />

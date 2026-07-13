@@ -109,6 +109,19 @@ export default function ProjectsIndexPage() {
         </div>
         <div className="flex flex-wrap gap-2">
           <DataStateBadge state={dataState} source={source || undefined} fetchedAt={fetchedAt} />
+          <a href="/command-center" className="rounded-lg border border-border px-3 py-1.5 text-xs text-fg-muted hover:border-border-light hover:text-fg">Command Center</a>
+          <button
+            onClick={() => {
+              const params = new URLSearchParams()
+              if (status !== 'all') params.set('status', status)
+              if (query.trim()) params.set('q', query.trim())
+              params.set('format', 'csv')
+              window.open(`/api/portfolio/export?${params.toString()}`, '_blank', 'noopener,noreferrer')
+            }}
+            className="rounded-lg border border-border px-3 py-1.5 text-xs text-fg-muted hover:border-border-light hover:text-fg"
+          >
+            Export CSV
+          </button>
           <button onClick={refreshProjects} className="rounded-lg border border-border px-3 py-1.5 text-xs text-fg-muted hover:border-border-light hover:text-fg">Refresh</button>
           <button onClick={() => setShowCreate(true)} className="rounded-lg border border-accent/30 bg-accent/10 px-3 py-1.5 text-xs font-medium text-accent-light hover:border-accent/50">+ New Project</button>
         </div>

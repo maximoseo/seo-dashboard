@@ -19,6 +19,9 @@ import {
   type ProjectStatus,
   type SeedProject,
 } from './projects/projectSummary.js'
+import { alertsFromSnapshotRows, buildSnapshotOverlayMap } from './data/snapshotSpine.js'
+import { loadLatestSnapshots, loadOpenCounts, persistAlertsAndTasks } from './data/persistOps.js'
+import { loadAgenticOsBridge, pushCriticalAlertToAsana, pushCriticalAlertToTodo } from './integrations/bridges.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
@@ -88,6 +91,19 @@ const DASHBOARD_TOKEN_TTL_SECONDS = Number.isFinite(parsedDashboardTokenTtl) && 
 const DASHBOARD_SESSION_COOKIE = 'maximo_dashboard_session'
 
 const supabase = SUPABASE_URL && SUPABASE_ANON_KEY ? createClient(SUPABASE_URL, SUPABASE_ANON_KEY) : null
+// Service-role client: durable writes + portfolio spine reads. Never expose this key to the browser.
+const SUPABASE_SERVICE_ROLE =
+  process.env.SUPABASE_SERVICE_ROLE ||
+  process.env.SUPABASE_SERVICE_KEY ||
+  process.env.SUPABASE_SERVICE_ROLE_KEY ||
+  process.env.SUPABASE_MCP_SERVICE_ROLE ||
+  ''
+const supabaseAdmin =
+  SUPABASE_URL && SUPABASE_SERVICE_ROLE
+    ? createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE, {
+        auth: { persistSession: false, autoRefreshToken: false },
+      })
+    : null
 
 type DashboardTokenPayload = {
   sub: string
@@ -1185,10 +1201,31 @@ function normalizeProjectPriority(value: unknown): ProjectPriority {
   return ['primary', 'high', 'medium', 'low'].includes(priority) ? priority as ProjectPriority : 'medium'
 }
 
+async function enrichWithSnapshotSpine(mapped: SeedProject[]): Promise<Map<string, import('./data/snapshotSpine.js').ProjectOverlay>> {
+  const empty = new Map()
+  if (!supabaseAdmin || mapped.length === 0) return empty
+
+  try {
+    const domainIds = mapped.map((p) => p.id)
+    const domainMeta = new Map(
+      mapped.map((p) => [p.id, { domain: p.domain, status: p.status, priority: p.priority }]),
+    )
+    const [snapshots, counts] = await Promise.all([
+      loadLatestSnapshots(supabaseAdmin, domainIds),
+      loadOpenCounts(supabaseAdmin, domainIds),
+    ])
+    return buildSnapshotOverlayMap(snapshots as any, counts.alertCounts, counts.taskCounts, domainMeta)
+  } catch (err) {
+    console.error('[projects] snapshot spine enrichment failed:', err)
+    return empty
+  }
+}
+
 async function loadProjectList(): Promise<ProjectListResult> {
-  if (supabase) {
+  const client = supabaseAdmin || supabase
+  if (client) {
     try {
-      const { data, error } = await supabase
+      const { data, error } = await client
         .from('seo_domains')
         .select('id, client_id, domain, market, name, status, priority, screenshot_url, seo_clients(id, name)')
         .order('created_at', { ascending: true })
@@ -1204,11 +1241,11 @@ async function loadProjectList(): Promise<ProjectListResult> {
 
       if (!error && Array.isArray(data) && data.length > 0) {
         const mapped = data.map((row: any): SeedProject => {
-          const client = Array.isArray(row.seo_clients) ? row.seo_clients[0] : row.seo_clients
-          const clientName = client?.name || row.name || row.domain
+          const clientRow = Array.isArray(row.seo_clients) ? row.seo_clients[0] : row.seo_clients
+          const clientName = clientRow?.name || row.name || row.domain
           return {
             id: String(row.id || row.domain),
-            clientId: String(row.client_id || client?.id || row.id || row.domain),
+            clientId: String(row.client_id || clientRow?.id || row.id || row.domain),
             clientName,
             name: row.name || clientName,
             domain: row.domain,
@@ -1220,7 +1257,8 @@ async function loadProjectList(): Promise<ProjectListResult> {
         }).filter(project => project.domain)
 
         if (mapped.length > 0) {
-          const projects = buildProjectSummaries(mapped, 'supabase')
+          const overlays = await enrichWithSnapshotSpine(mapped)
+          const projects = buildProjectSummaries(mapped, 'supabase', overlays)
           return { projects, source: 'supabase', fetchedAt: new Date().toISOString() }
         }
       }
@@ -1343,10 +1381,48 @@ app.get('/api/clients', async (_req, res) => {
   })
 })
 
-app.get('/api/tasks', (req, res) => {
+app.get('/api/tasks', async (req, res) => {
   const { domain = 'maximo-seo.ai' } = req.query as Record<string, string>
+  const cleanDomain = String(domain).replace(/^https?:\/\//, '').replace(/\/$/, '')
+
+  if (supabaseAdmin) {
+    try {
+      const { data: domainRow } = await supabaseAdmin
+        .from('seo_domains')
+        .select('id, domain')
+        .eq('domain', cleanDomain)
+        .maybeSingle()
+      if (domainRow?.id) {
+        const { data: tasks } = await supabaseAdmin
+          .from('seo_tasks')
+          .select('id, title, status, priority, brief, acceptance_criteria, alert_id, created_at, updated_at')
+          .eq('domain_id', domainRow.id)
+          .order('created_at', { ascending: false })
+          .limit(50)
+        if (tasks && tasks.length > 0) {
+          return res.json({
+            tasks: tasks.map((t: any) => ({
+              id: t.id,
+              title: t.title,
+              status: t.status,
+              priority: t.priority,
+              brief: t.brief,
+              acceptanceCriteria: t.acceptance_criteria || [],
+              alertId: t.alert_id,
+              createdAt: t.created_at,
+            })),
+            source: 'supabase',
+            fetchedAt: new Date().toISOString(),
+          })
+        }
+      }
+    } catch (err) {
+      console.error('[tasks] durable load failed', err)
+    }
+  }
+
   const seedAlerts = generateAlerts({
-    domain,
+    domain: cleanDomain,
     previousOrganicTraffic: 1000,
     organicTraffic: 730,
     brokenPagesWithBacklinks: 1,
@@ -1357,6 +1433,219 @@ app.get('/api/tasks', (req, res) => {
     source: 'rules-engine',
     fetchedAt: new Date().toISOString(),
   })
+})
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// P1/P2 Command center + Sync + Bridges
+// ═══════════════════════════════════════════════════════════════════════════════
+
+app.get('/api/command-center', async (_req, res) => {
+  const result = await loadProjectList()
+  const projects = result.projects
+  const healths = projects.map((p) => p.healthScore).filter((h): h is number => typeof h === 'number')
+  const avgHealth = healths.length ? Math.round(healths.reduce((a, b) => a + b, 0) / healths.length) : null
+  const openAlerts = projects.reduce((sum, p) => sum + (p.alertCount || 0), 0)
+  const openTasks = projects.reduce((sum, p) => sum + (p.taskCount || 0), 0)
+  const synced = projects.filter((p) => p.lastFetchedAt).length
+  const stale = projects.filter((p) => {
+    if (!p.lastFetchedAt) return true
+    return Date.now() - new Date(p.lastFetchedAt).getTime() > 48 * 60 * 60 * 1000
+  }).length
+  const byStatus = projects.reduce<Record<string, number>>((acc, p) => {
+    acc[p.status] = (acc[p.status] || 0) + 1
+    return acc
+  }, {})
+  const worst = [...projects]
+    .filter((p) => typeof p.healthScore === 'number')
+    .sort((a, b) => (a.healthScore || 0) - (b.healthScore || 0))
+    .slice(0, 8)
+    .map((p) => ({
+      domain: p.domain,
+      name: p.name,
+      healthScore: p.healthScore,
+      alertCount: p.alertCount,
+      taskCount: p.taskCount,
+      lastFetchedAt: p.lastFetchedAt,
+      status: p.status,
+    }))
+  const hottestAlerts = [...projects]
+    .filter((p) => (p.alertCount || 0) > 0)
+    .sort((a, b) => (b.alertCount || 0) - (a.alertCount || 0))
+    .slice(0, 8)
+    .map((p) => ({ domain: p.domain, alertCount: p.alertCount, taskCount: p.taskCount, healthScore: p.healthScore }))
+
+  res.json({
+    kpis: {
+      projects: projects.length,
+      avgHealth,
+      openAlerts,
+      openTasks,
+      synced,
+      stale,
+      byStatus,
+      serviceRole: Boolean(supabaseAdmin),
+    },
+    worst,
+    hottestAlerts,
+    source: result.source,
+    fetchedAt: result.fetchedAt,
+  })
+})
+
+app.get('/api/portfolio/export', async (req, res) => {
+  const result = await loadProjectList()
+  const status = String((req.query as any).status || 'all')
+  const q = String((req.query as any).q || '').toLowerCase()
+  const rows = result.projects.filter((p) => {
+    const statusOk = status === 'all' || p.status === status
+    const qOk = !q || [p.name, p.domain, p.clientName, p.market].some((v) => String(v).toLowerCase().includes(q))
+    return statusOk && qOk
+  })
+  const format = String((req.query as any).format || 'json')
+  if (format === 'csv') {
+    const headers = ['domain', 'name', 'clientName', 'market', 'status', 'priority', 'healthScore', 'alertCount', 'taskCount', 'lastFetchedAt', 'dataState']
+    const escape = (v: unknown) => {
+      const s = String(v ?? '')
+      return s.includes(',') || s.includes('"') || s.includes('\n') ? `"${s.replace(/"/g, '""')}"` : s
+    }
+    const lines = [
+      headers.join(','),
+      ...rows.map((p) =>
+        [
+          p.domain,
+          p.name,
+          p.clientName,
+          p.market,
+          p.status,
+          p.priority,
+          p.healthScore ?? '',
+          p.alertCount,
+          p.taskCount,
+          p.lastFetchedAt ?? '',
+          p.dataState,
+        ].map(escape).join(','),
+      ),
+    ]
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8')
+    res.setHeader('Content-Disposition', 'attachment; filename="seo-portfolio.csv"')
+    return res.send('\uFEFF' + lines.join('\n'))
+  }
+  res.json({ projects: rows, count: rows.length, source: result.source, fetchedAt: result.fetchedAt })
+})
+
+app.post('/api/sync', expensiveLimiter, async (req, res) => {
+  if (!supabaseAdmin) {
+    return res.status(503).json({ error: 'SUPABASE_SERVICE_ROLE not configured — cannot persist spine writes' })
+  }
+
+  const body = (req.body || {}) as { domain?: string; persist?: boolean; createTasks?: boolean; push?: boolean; limit?: number }
+  const createTasks = body.createTasks !== false
+  const push = body.push === true
+  const domainFilter = body.domain ? String(body.domain).replace(/^https?:\/\//, '').replace(/\/$/, '') : null
+  const limit = Math.min(Math.max(Number(body.limit || 20), 1), 50)
+
+  let query = supabaseAdmin
+    .from('seo_domains')
+    .select('id, domain, name, status')
+    .eq('status', 'active')
+    .order('domain', { ascending: true })
+    .limit(limit)
+  if (domainFilter) {
+    query = supabaseAdmin
+      .from('seo_domains')
+      .select('id, domain, name, status')
+      .eq('domain', domainFilter)
+      .limit(1)
+  }
+
+  const { data: domains, error } = await query
+  if (error) return res.status(500).json({ error: error.message })
+  if (!domains?.length) return res.status(404).json({ error: 'No domains found' })
+
+  const results: any[] = []
+  for (const d of domains) {
+    const snaps = await loadLatestSnapshots(supabaseAdmin, [d.id], 20)
+    const alerts = alertsFromSnapshotRows(d.domain, snaps as any)
+    const persisted = await persistAlertsAndTasks({
+      admin: supabaseAdmin,
+      domainId: d.id,
+      domain: d.domain,
+      alerts,
+      createTasks,
+    })
+
+    const bridges: any[] = []
+    if (push) {
+      for (const alert of alerts.filter((a) => a.severity !== 'info').slice(0, 3)) {
+        const [todo, asana] = await Promise.all([
+          pushCriticalAlertToTodo({
+            domain: d.domain,
+            title: alert.title,
+            detail: alert.detail,
+            severity: alert.severity,
+            alertDbId: persisted.alertIds[0],
+          }),
+          pushCriticalAlertToAsana({
+            domain: d.domain,
+            title: alert.title,
+            detail: alert.detail,
+            severity: alert.severity,
+          }),
+        ])
+        bridges.push({ alert: alert.title, todo, asana })
+      }
+    }
+
+    results.push({
+      domain: d.domain,
+      domainId: d.id,
+      alertsGenerated: alerts.length,
+      ...persisted,
+      bridges,
+    })
+  }
+
+  res.json({
+    ok: true,
+    synced: results.length,
+    results,
+    fetchedAt: new Date().toISOString(),
+  })
+})
+
+app.get('/api/agentic-os/bridge', async (_req, res) => {
+  if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE) {
+    return res.status(503).json({ error: 'Service role required for Agentic OS bridge' })
+  }
+  const payload = await loadAgenticOsBridge(SUPABASE_URL, SUPABASE_SERVICE_ROLE)
+  res.json(payload)
+})
+
+app.post('/api/bridges/todo', expensiveLimiter, async (req, res) => {
+  const schema = z.object({
+    domain: domainSchema,
+    title: z.string().min(1).max(300),
+    detail: z.string().min(1).max(5000),
+    severity: z.enum(['info', 'warning', 'critical']).default('warning'),
+    alertDbId: z.string().uuid().optional(),
+  })
+  const parsed = schema.safeParse(req.body)
+  if (!parsed.success) return res.status(400).json({ error: 'Invalid body', details: parsed.error.issues })
+  const result = await pushCriticalAlertToTodo(parsed.data)
+  res.status(result.ok ? 200 : result.skipped ? 202 : 502).json(result)
+})
+
+app.post('/api/bridges/asana', expensiveLimiter, async (req, res) => {
+  const schema = z.object({
+    domain: domainSchema,
+    title: z.string().min(1).max(300),
+    detail: z.string().min(1).max(5000),
+    severity: z.enum(['info', 'warning', 'critical']).default('warning'),
+  })
+  const parsed = schema.safeParse(req.body)
+  if (!parsed.success) return res.status(400).json({ error: 'Invalid body', details: parsed.error.issues })
+  const result = await pushCriticalAlertToAsana(parsed.data)
+  res.status(result.ok ? 200 : result.skipped ? 202 : 502).json(result)
 })
 
 app.post('/api/reports/preview', validateBody(z.object({
@@ -1432,6 +1721,12 @@ app.get('/api/status', async (_req, res) => {
     auth: {
       configured: dashboardAuthConfigured() || Boolean(supabase),
       mode: dashboardAuthConfigured() ? 'dashboard-cookie' : supabase ? 'supabase' : 'not-configured',
+    },
+    spine: {
+      supabaseAnon: Boolean(supabase),
+      supabaseServiceRole: Boolean(supabaseAdmin),
+      todoBridge: Boolean(process.env.TODO_API_KEY),
+      asanaBridge: Boolean(process.env.ASANA_ACCESS_TOKEN || process.env.ASANA_API_KEY),
     },
     statuses: providerStatus(),
     cacheStats: { realtime: realtimeCache.getStats(), historical: historicalCache.getStats() },

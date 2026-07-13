@@ -19,6 +19,7 @@ async function fetchAlertCount(domain: string): Promise<number> {
 
 const navItems = [
   { name: 'Clients', icon: CompetitorsIcon },
+  { name: 'Command Center', icon: VitalsIcon },
   { name: 'Keywords', icon: KeywordsIcon },
   { name: 'Backlinks', icon: BacklinksIcon },
   { name: 'Pages', icon: PagesIcon },

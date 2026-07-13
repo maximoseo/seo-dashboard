@@ -43,7 +43,7 @@ export type ProjectSummary = SeedProject & {
   taskCount: number
   dataState: DataState
   connectedSources: string[]
-  lastFetchedAt: string
+  lastFetchedAt: string | null
   modules: ProjectModuleSummary[]
   screenshotUrl?: string
 }
@@ -76,25 +76,55 @@ function stableCount(project: SeedProject, seed: number, max: number): number {
   return hash % max
 }
 
-export function buildProjectSummaries(seedProjects: SeedProject[], source: 'supabase' | 'local-seed' | 'fallback'): ProjectSummary[] {
+export type ProjectOverlayInput = {
+  healthScore?: number | null
+  alertCount?: number
+  taskCount?: number
+  lastFetchedAt?: string | null
+  connectedSources?: string[]
+  dataState?: DataState
+}
+
+export function buildProjectSummaries(
+  seedProjects: SeedProject[],
+  source: 'supabase' | 'local-seed' | 'fallback',
+  overlays?: Map<string, ProjectOverlayInput> | Record<string, ProjectOverlayInput>,
+): ProjectSummary[] {
   const fetchedAt = new Date().toISOString()
   const dataState: DataState = source === 'supabase' ? 'live' : 'cached'
+  const getOverlay = (project: SeedProject): ProjectOverlayInput | undefined => {
+    if (!overlays) return undefined
+    if (overlays instanceof Map) {
+      return overlays.get(project.id) || overlays.get(project.domain)
+    }
+    return overlays[project.id] || overlays[project.domain]
+  }
 
-  return seedProjects.map(project => ({
-    ...project,
-    healthScore: stableProjectScore(project),
-    alertCount: stableCount(project, 11, 6),
-    taskCount: stableCount(project, 17, 9) + 1,
-    dataState,
-    connectedSources: ['Rules Engine', 'SEMrush', 'DataForSEO', 'PageSpeed'],
-    lastFetchedAt: fetchedAt,
-    modules: moduleDefinitions.map(module => ({
-      ...module,
-      href: module.slug === 'overview'
-        ? `/projects/${encodeURIComponent(project.domain)}`
-        : `/projects/${encodeURIComponent(project.domain)}/${module.slug}`,
-    })),
-  }))
+  return seedProjects.map(project => {
+    const overlay = getOverlay(project)
+    const hasRealSpine = Boolean(overlay && (overlay.lastFetchedAt || overlay.healthScore != null || (overlay.alertCount ?? 0) > 0))
+    return {
+      ...project,
+      healthScore: overlay?.healthScore ?? (hasRealSpine ? null : stableProjectScore(project)),
+      alertCount: overlay?.alertCount ?? (hasRealSpine ? 0 : stableCount(project, 11, 6)),
+      taskCount: overlay?.taskCount ?? (hasRealSpine ? 0 : stableCount(project, 17, 9) + 1),
+      dataState: overlay?.dataState ?? dataState,
+      connectedSources: overlay?.connectedSources?.length
+        ? overlay.connectedSources
+        : (source === 'supabase' ? ['Supabase roster'] : ['Rules Engine', 'SEMrush', 'DataForSEO', 'PageSpeed']),
+      lastFetchedAt: overlay?.lastFetchedAt ?? (hasRealSpine ? null : fetchedAt),
+      modules: moduleDefinitions.map(module => ({
+        ...module,
+        // Prefer live when durable snapshots exist for overview family.
+        state: hasRealSpine && ['overview', 'alerts', 'tasks', 'reports', 'settings'].includes(module.slug)
+          ? ('live' as DataState)
+          : module.state,
+        href: module.slug === 'overview'
+          ? `/projects/${encodeURIComponent(project.domain)}`
+          : `/projects/${encodeURIComponent(project.domain)}/${module.slug}`,
+      })),
+    }
+  })
 }
 
 export function getProjectByDomain(projects: ProjectSummary[], domain: string | null | undefined): ProjectSummary | null {
