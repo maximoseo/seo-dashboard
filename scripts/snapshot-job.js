@@ -50,7 +50,7 @@ async function rest(path, { method = 'GET', body, headers = {}, prefer } = {}) {
     body: body ? JSON.stringify(body) : undefined,
   })
   const text = await res.text()
-  let data = null
+  let data
   try {
     data = text ? JSON.parse(text) : null
   } catch {
@@ -122,7 +122,7 @@ async function fetchProxy(jar, endpoint, params = {}, method = 'GET', body) {
     signal: AbortSignal.timeout(45000),
   })
   const text = await res.text()
-  let data = null
+  let data
   try {
     data = text ? JSON.parse(text) : null
   } catch {
