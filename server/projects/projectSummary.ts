@@ -102,20 +102,24 @@ export function buildProjectSummaries(
 
   return seedProjects.map(project => {
     const overlay = getOverlay(project)
-    const hasRealSpine = Boolean(overlay && (overlay.lastFetchedAt || overlay.healthScore != null || (overlay.alertCount ?? 0) > 0))
+    // Durable tables beat invention: only local-seed/fallback may synthesize counters.
+    const inventDemoCounts = source !== 'supabase' && !overlay
+    const hasRealSpine = Boolean(
+      overlay && (overlay.lastFetchedAt || overlay.healthScore != null || (overlay.alertCount ?? 0) > 0 || (overlay.taskCount ?? 0) > 0),
+    )
     return {
       ...project,
-      healthScore: overlay?.healthScore ?? (hasRealSpine ? null : stableProjectScore(project)),
-      alertCount: overlay?.alertCount ?? (hasRealSpine ? 0 : stableCount(project, 11, 6)),
-      taskCount: overlay?.taskCount ?? (hasRealSpine ? 0 : stableCount(project, 17, 9) + 1),
+      healthScore: overlay?.healthScore ?? (inventDemoCounts ? stableProjectScore(project) : (hasRealSpine ? null : null)),
+      alertCount: overlay?.alertCount ?? (inventDemoCounts ? stableCount(project, 11, 6) : 0),
+      taskCount: overlay?.taskCount ?? (inventDemoCounts ? stableCount(project, 17, 9) + 1 : 0),
       dataState: overlay?.dataState ?? dataState,
       connectedSources: overlay?.connectedSources?.length
         ? overlay.connectedSources
         : (source === 'supabase' ? ['Supabase roster'] : ['Rules Engine', 'SEMrush', 'DataForSEO', 'PageSpeed']),
-      lastFetchedAt: overlay?.lastFetchedAt ?? (hasRealSpine ? null : fetchedAt),
+      lastFetchedAt: overlay?.lastFetchedAt ?? (inventDemoCounts ? fetchedAt : null),
       modules: moduleDefinitions.map(module => ({
         ...module,
-        // Prefer live when durable snapshots exist for overview family.
+        // Prefer live when durable snapshots/count spine exist for overview family.
         state: hasRealSpine && ['overview', 'alerts', 'tasks', 'reports', 'settings'].includes(module.slug)
           ? ('live' as DataState)
           : module.state,

@@ -30,4 +30,14 @@ describe('project summary builders', () => {
     expect(getProjectByDomain(projects, 'MAXIMO-SEO.AI')?.id).toBe('maximo')
     expect(getProjectByDomain(projects, 'missing.co.il')).toBeNull()
   })
+
+  it('does not invent alert/task counters for durable supabase portfolio missing overlays', () => {
+    const projects = buildProjectSummaries([
+      { id: 'uuid-1', clientId: 'c1', clientName: 'NYG', name: 'NYG', domain: 'nyg.co.il', market: 'Israel', status: 'active', priority: 'high' },
+    ], 'supabase')
+
+    expect(projects[0].alertCount).toBe(0)
+    expect(projects[0].taskCount).toBe(0)
+    expect(projects[0].dataState).toBe('live')
+  })
 })
