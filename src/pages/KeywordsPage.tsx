@@ -2,6 +2,7 @@ import { useState, useMemo } from 'react'
 import { motion } from 'framer-motion'
 import { useKeywords } from '../api/client'
 import { useSEO } from '@/contexts/SEOContext'
+import { useProject } from '@/contexts/ProjectContext'
 import DataStateBadge from '@/components/DataStateBadge'
 import { normalizeSemrushKeywords, normalizeAhrefsKeywords, normalizeDataForSEOKeywords, formatMetric } from '../api/normalize'
 import { exportToCSV, ExportCSVButton } from '@/lib/csvExport'
@@ -75,10 +76,29 @@ export default function KeywordsPage() {
   const [page, setPage] = useState(1)
 
   const { domain } = useSEO()
-  const { data: apiData, isLoading, error } = useKeywords(domain)
+  const { activeProject } = useProject()
+  const projectMarket = activeProject?.market || null
+  const { data: apiData, isLoading, error } = useKeywords(domain, projectMarket)
 
   // Normalize API data from multiple sources
   const keywords: Keyword[] = useMemo(() => {
+    // Prefer server-normalized rows when present (deduped + trend)
+    if (Array.isArray(apiData?.normalized) && apiData.normalized.length) {
+      return apiData.normalized.map((k: any) => ({
+        keyword: k.keyword || '',
+        volume: k.volume ?? 0,
+        position: k.position ?? 0,
+        change: k.previousPosition != null && k.position != null ? (k.previousPosition - k.position) : 0,
+        url: k.url ?? '',
+        difficulty: k.difficulty ?? 0,
+        cpc: k.cpc ?? 0,
+        serpFeatures: k.serpFeatures || [],
+        intent: k.intent || 'informational',
+        trend: [],
+        traffic: k.traffic ?? 0,
+      }))
+    }
+
     if (!apiData?.sources) return []
     const result: Keyword[] = []
     
@@ -145,6 +165,10 @@ export default function KeywordsPage() {
     return result
   }, [apiData])
 
+  const movements = apiData?.movements || null
+  const softDegraded = Array.isArray(apiData?.softDegraded) ? apiData.softDegraded : []
+  const marketLabel = apiData?.market?.label || null
+
   const filtered = useMemo(() => {
     let data = [...keywords]
     if (search) data = data.filter(k => k.keyword.toLowerCase().includes(search.toLowerCase()))
@@ -201,12 +225,46 @@ export default function KeywordsPage() {
         <div className="flex gap-1.5 flex-wrap items-center">
           <ExportCSVButton onClick={handleExport} />
           <DataStateBadge state={error ? 'unavailable' : keywords.length > 0 ? 'live' : isLoading ? 'cached' : 'unavailable'} source={domain} />
+          {marketLabel && (
+            <span className="text-[10px] md:text-xs bg-blue-500/20 text-blue-300 border border-blue-500/30 px-1.5 md:px-2 py-0.5 md:py-1 rounded touch-target-reset">Market: {marketLabel}</span>
+          )}
+          {softDegraded.map((src: string) => (
+            <span key={`soft-${src}`} className="text-[10px] md:text-xs bg-amber-500/20 text-amber-300 border border-amber-500/30 px-1.5 md:px-2 py-0.5 md:py-1 rounded touch-target-reset">{src} soft</span>
+          ))}
           <span className="text-[10px] md:text-xs bg-orange-500/20 text-orange-300 border border-orange-500/30 px-1.5 md:px-2 py-0.5 md:py-1 rounded touch-target-reset">Ahrefs</span>
           <span className="text-[10px] md:text-xs bg-orange-400/20 text-orange-200 border border-orange-400/30 px-1.5 md:px-2 py-0.5 md:py-1 rounded touch-target-reset">SEMrush</span>
           <span className="text-[10px] md:text-xs bg-purple-500/20 text-purple-300 border border-purple-500/30 px-1.5 md:px-2 py-0.5 md:py-1 rounded touch-target-reset">DataForSEO</span>
           <span className="text-[10px] md:text-xs bg-cyan-500/20 text-cyan-300 border border-cyan-500/30 px-1.5 md:px-2 py-0.5 md:py-1 rounded touch-target-reset">SE Ranking</span>
         </div>
       </div>
+
+      {/* Keyword movements from normalized server rows */}
+      {movements && (movements.improved?.length || movements.declined?.length || movements.newEntries?.length || movements.lost?.length) ? (
+        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3">
+          {[
+            { key: 'improved', label: 'Improved', color: 'text-green', rows: movements.improved || [] },
+            { key: 'declined', label: 'Declined', color: 'text-red', rows: movements.declined || [] },
+            { key: 'newEntries', label: 'New', color: 'text-accent-light', rows: movements.newEntries || [] },
+            { key: 'lost', label: 'Lost', color: 'text-amber-300', rows: movements.lost || [] },
+          ].map((bucket) => (
+            <div key={bucket.key} className="bg-bg-card border border-border rounded-xl p-3.5">
+              <div className="flex items-center justify-between mb-2">
+                <p className={`text-xs font-semibold uppercase tracking-wider ${bucket.color}`}>{bucket.label}</p>
+                <span className="text-xs text-fg-dim">{bucket.rows.length}</span>
+              </div>
+              <div className="space-y-1.5 max-h-36 overflow-auto">
+                {bucket.rows.slice(0, 6).map((row: any) => (
+                  <div key={`${bucket.key}-${row.keyword}`} className="flex items-center justify-between gap-2 text-xs">
+                    <span className="truncate text-fg">{row.keyword}</span>
+                    <span className="text-fg-muted shrink-0">#{row.position ?? '—'}</span>
+                  </div>
+                ))}
+                {!bucket.rows.length && <p className="text-xs text-fg-dim">No rows</p>}
+              </div>
+            </div>
+          ))}
+        </div>
+      ) : null}
 
       {/* Summary Cards */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 md:gap-4">

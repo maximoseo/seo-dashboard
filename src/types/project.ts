@@ -46,8 +46,9 @@ export interface ProjectSummary {
 
 export interface ProjectListResponse {
   projects: ProjectSummary[]
-  source: 'supabase' | 'local-seed' | 'fallback'
+  source: 'supabase' | 'local-seed' | 'fallback' | 'empty'
   fetchedAt: string
+  warning?: string
 }
 
 export interface ProjectResponse {

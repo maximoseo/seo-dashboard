@@ -35,7 +35,8 @@ export interface DfsDomainSummary {
   rank: number
 }
 
-export async function fetchSerpResults(keyword: string, locationCode = 2840): Promise<SerpResult[]> {
+export async function fetchSerpResults(keyword: string, locationCode = 2376): Promise<SerpResult[]> {
+  // Default location Israel (2376) for agency-first IL market.
   const cacheKey = `serp_${keyword}_${locationCode}`
   const cached = getCached<SerpResult[]>(cacheKey)
   if (cached) return cached

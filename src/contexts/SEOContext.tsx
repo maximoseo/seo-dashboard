@@ -31,8 +31,9 @@ export function useSEO() {
 }
 
 export function SEOProvider({ children }: { children: ReactNode }) {
-  const { activeDomain, setActiveProject } = useProject()
+  const { activeDomain, activeProject, setActiveProject } = useProject()
   const domain = activeDomain || 'maximo-seo.ai'
+  const market = activeProject?.market || null
   const [overview, setOverview] = useState<OverviewData | null>(null)
   const [overviewLoading, setOverviewLoading] = useState(false)
   const [overviewError, setOverviewError] = useState<string | null>(null)
@@ -43,14 +44,14 @@ export function SEOProvider({ children }: { children: ReactNode }) {
     setOverviewLoading(true)
     setOverviewError(null)
     try {
-      const data = await fetchOverview(domain)
+      const data = await fetchOverview(domain, market)
       setOverview(data)
     } catch (e) {
       setOverviewError(e instanceof Error ? e.message : 'Failed to load overview')
     } finally {
       setOverviewLoading(false)
     }
-  }, [domain])
+  }, [domain, market])
 
   const loadHealth = useCallback(async () => {
     setHealthLoading(true)

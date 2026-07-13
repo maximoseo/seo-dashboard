@@ -7,21 +7,24 @@ import KeywordRankings from '@/components/KeywordRankings'
 import CoreWebVitals from '@/components/CoreWebVitals'
 import AlertsPanel from '@/components/AlertsPanel'
 import { useSEO } from '@/contexts/SEOContext'
+import { useProject } from '@/contexts/ProjectContext'
 import { fetchSemrushOverview } from '@/services/seoApi'
 
 export default function DashboardPage() {
   const [dateRange, setDateRange] = useState('6M')
   const { domain, overview } = useSEO()
+  const { activeProject } = useProject()
+  const projectMarket = activeProject?.market || null
   const [semrush, setSemrush] = useState<Record<string, string> | null>(null)
   const [_semrushLoading, setSemrushLoading] = useState(true)
 
   useEffect(() => {
     setSemrushLoading(true)
-    fetchSemrushOverview(domain)
+    fetchSemrushOverview(domain, projectMarket)
       .then(data => setSemrush(data))
       .catch(() => setSemrush(null))
       .finally(() => setSemrushLoading(false))
-  }, [domain])
+  }, [domain, projectMarket])
 
   const dr = overview?.sources?.ahrefs?.domain_rating?.domain_rating
   const ahrefsRank = overview?.sources?.ahrefs?.domain_rating?.ahrefs_rank

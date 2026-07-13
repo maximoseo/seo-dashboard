@@ -10,7 +10,19 @@ import crypto from 'node:crypto'
 import { createClient } from '@supabase/supabase-js'
 import { generateAlerts } from './alerts/rules.js'
 import { createSeoTaskFromAlert } from './tasks/createSeoTask.js'
-import { renderReportMarkdown } from './reports/renderReport.js'
+import {
+  REPORT_TEMPLATES,
+  defaultSectionsForTemplate,
+  renderReportHtml,
+  renderReportMarkdown,
+  type ReportLocale,
+  type ReportTemplateId,
+} from './reports/renderReport.js'
+import {
+  buildGeoAiOverview,
+  buildLocalSeoOverview,
+  summarizeKeywordSerpSignals,
+} from './modules/localGeo.js'
 import {
   buildProjectSummaries,
   getProjectByDomain,
@@ -22,6 +34,20 @@ import {
 import { alertsFromSnapshotRows, buildSnapshotOverlayMap } from './data/snapshotSpine.js'
 import { loadLatestSnapshots, loadOpenCounts, persistAlertsAndTasks } from './data/persistOps.js'
 import { loadAgenticOsBridge, pushCriticalAlertToAsana, pushCriticalAlertToTodo } from './integrations/bridges.js'
+import { resolveMarket, serankingResearchUrl } from './markets/resolveMarket.js'
+import {
+  computeCompetitorGaps,
+  competitorsFromDataForSEO,
+  competitorsFromExa,
+  competitorsFromSemrush,
+  keywordMovements,
+  keywordsFromAhrefs,
+  keywordsFromDataForSEO,
+  keywordsFromSemrush,
+  mergeCompetitors,
+  mergeKeywordRows,
+  type KeywordRow,
+} from './providers/adapters.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
@@ -74,6 +100,9 @@ app.use('/api', generalLimiter)
 const SUPABASE_URL = process.env.SUPABASE_URL || ''
 const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY || ''
 const AUTH_DISABLED = process.env.AUTH_DISABLED === 'true' // for local dev only
+const IS_PROD = process.env.NODE_ENV === 'production' || process.env.VERCEL === '1'
+// Local seed/demo project lists alone are for local/dev only. Force real Supabase spine in prod.
+const ALLOW_LOCAL_SEED = !IS_PROD && process.env.ALLOW_LOCAL_SEED !== 'false'
 const DASHBOARD_AUTH_USERNAME = process.env.DASHBOARD_AUTH_USERNAME || process.env.DASHBOARD_USERNAME || process.env.DASHBOARD_EMAIL || 'service@maximo-seo.com'
 // Never ship plaintext password defaults — production must set DASHBOARD_AUTH_PASSWORD via env.
 const DASHBOARD_AUTH_PASSWORD = process.env.DASHBOARD_AUTH_PASSWORD || process.env.DASHBOARD_PASSWORD || ''
@@ -197,8 +226,13 @@ function clearSessionCookie(req: express.Request): string {
 }
 
 // Auth middleware — /api/health and /api/auth/login are intentionally public.
+// Public share links are read-only HTML/MD (no mutating data).
 app.use('/api', async (req, res, next) => {
-  if (req.path === '/health' || req.path === '/auth/login' ) {
+  if (
+    req.path === '/health' ||
+    req.path === '/auth/login' ||
+    (req.method === 'GET' && /^\/reports\/share\/[^/]+$/.test(req.path))
+  ) {
     return next()
   }
 
@@ -404,8 +438,69 @@ function providerUnavailable(provider: string, error: unknown) {
     state: 'unavailable',
     error: `${provider} unavailable`,
     message: status ? `Provider HTTP ${status}` : message,
+    httpStatus: status,
+    softDegraded: status === 403 || status === 401 || status === 402 || status === 429,
     fetchedAt: new Date().toISOString(),
   }
+}
+
+function marketFromRequest(req: { query?: any; body?: any }, domain?: string | null) {
+  const q = (req.query || {}) as Record<string, string>
+  const b = (req.body || {}) as Record<string, string>
+  return resolveMarket({
+    domain: domain || q.domain || b.domain || null,
+    market: q.market || b.market || null,
+    override: q.db || q.database || q.region || b.database || b.region || null,
+  })
+}
+
+async function findDomainId(domain: string): Promise<string | null> {
+  if (!supabaseAdmin) return null
+  const clean = String(domain || '').replace(/^https?:\/\//, '').replace(/\/$/, '').replace(/^www\./, '')
+  const { data } = await supabaseAdmin
+    .from('seo_domains')
+    .select('id, domain')
+    .eq('domain', clean)
+    .limit(1)
+    .maybeSingle()
+  return data?.id ? String(data.id) : null
+}
+
+async function loadSnapshotPayload(domain: string, provider: string): Promise<{ data: any; fetchedAt: string | null } | null> {
+  if (!supabaseAdmin) return null
+  const domainId = await findDomainId(domain)
+  if (!domainId) return null
+  const { data } = await supabaseAdmin
+    .from('seo_snapshots')
+    .select('data, fetched_at')
+    .eq('domain_id', domainId)
+    .eq('provider', provider)
+    .order('fetched_at', { ascending: false })
+    .limit(1)
+    .maybeSingle()
+  if (!data?.data) return null
+  return { data: data.data, fetchedAt: data.fetched_at || null }
+}
+
+async function persistSnapshot(domain: string, provider: string, payload: unknown): Promise<void> {
+  if (!supabaseAdmin || !payload || typeof payload !== 'object') return
+  // Do not persist soft-degraded empty provider errors
+  if ((payload as any).ok === false && (payload as any).state === 'unavailable') return
+  const domainId = await findDomainId(domain)
+  if (!domainId) return
+  const today = new Date().toISOString().slice(0, 10)
+  await supabaseAdmin.from('seo_snapshots').upsert(
+    {
+      domain_id: domainId,
+      provider,
+      snapshot_date: today,
+      data: payload,
+      fetched_at: new Date().toISOString(),
+    },
+    { onConflict: 'domain_id,provider,snapshot_date' },
+  ).then(({ error }) => {
+    if (error) console.error('[persistSnapshot]', provider, domain, error.message)
+  })
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -501,10 +596,11 @@ function parseSemrushCSV(csv: string): Record<string, string>[] {
 
 app.get('/api/semrush/domain-overview', expensiveLimiter, budgetMiddleware('semrush'), async (req, res) => {
   const { domain } = req.query as Record<string, string>
+  const pack = marketFromRequest(req, domain)
   try {
-    const data = await withCache(realtimeCache, `semrush_overview_${domain}`, async () => {
+    const data = await withCache(realtimeCache, `semrush_overview_${domain}_${pack.semrushDatabase}`, async () => {
       const r = await axios.get('https://api.semrush.com/', {
-        params: { type: 'domain_ranks', key: SEMRUSH_API_KEY, domain, database: 'us', export_columns: 'Dn,Rk,Or,Ot,Oc,Ad,At,Ac' },
+        params: { type: 'domain_ranks', key: SEMRUSH_API_KEY, domain, database: pack.semrushDatabase, export_columns: 'Dn,Rk,Or,Ot,Oc,Ad,At,Ac' },
       })
       const rows = parseSemrushCSV(r.data)
       return rows[0] || null
@@ -515,10 +611,11 @@ app.get('/api/semrush/domain-overview', expensiveLimiter, budgetMiddleware('semr
 
 app.get('/api/semrush/competitors', expensiveLimiter, budgetMiddleware('semrush'), async (req, res) => {
   const { domain } = req.query as Record<string, string>
+  const pack = marketFromRequest(req, domain)
   try {
-    const data = await withCache(historicalCache, `semrush_competitors_${domain}`, async () => {
+    const data = await withCache(historicalCache, `semrush_competitors_${domain}_${pack.semrushDatabase}`, async () => {
       const r = await axios.get('https://api.semrush.com/', {
-        params: { type: 'domain_organic_organic', key: SEMRUSH_API_KEY, domain, database: 'us', display_limit: 10, export_columns: 'Dn,Cr,Np,Or,Ot,Oc,Ad' },
+        params: { type: 'domain_organic_organic', key: SEMRUSH_API_KEY, domain, database: pack.semrushDatabase, display_limit: 10, export_columns: 'Dn,Cr,Np,Or,Ot,Oc,Ad' },
       })
       return parseSemrushCSV(r.data)
     })
@@ -528,10 +625,12 @@ app.get('/api/semrush/competitors', expensiveLimiter, budgetMiddleware('semrush'
 
 app.get('/api/semrush/keyword-overview', expensiveLimiter, budgetMiddleware('semrush'), async (req, res) => {
   const { keyword, database } = req.query as Record<string, string>
+  const pack = resolveMarket({ override: database || null, market: (req.query as any).market })
   try {
-    const data = await withCache(historicalCache, `semrush_kw_${keyword}_${database || 'us'}`, async () => {
+    const db = database || pack.semrushDatabase
+    const data = await withCache(historicalCache, `semrush_kw_${keyword}_${db}`, async () => {
       const r = await axios.get('https://api.semrush.com/', {
-        params: { type: 'phrase_this', key: SEMRUSH_API_KEY, phrase: keyword, database: database || 'us', export_columns: 'Ph,Nq,Cp,Co,Nr,Td' },
+        params: { type: 'phrase_this', key: SEMRUSH_API_KEY, phrase: keyword, database: db, export_columns: 'Ph,Nq,Cp,Co,Nr,Td' },
       })
       const rows = parseSemrushCSV(r.data)
       return rows[0] || null
@@ -542,10 +641,11 @@ app.get('/api/semrush/keyword-overview', expensiveLimiter, budgetMiddleware('sem
 
 app.get('/api/semrush/domain-keywords', expensiveLimiter, budgetMiddleware('semrush'), async (req, res) => {
   const { domain, limit } = req.query as Record<string, string>
+  const pack = marketFromRequest(req, domain)
   try {
-    const data = await withCache(realtimeCache, `semrush_dkw_${domain}_${limit}`, async () => {
+    const data = await withCache(realtimeCache, `semrush_dkw_${domain}_${pack.semrushDatabase}_${limit}`, async () => {
       const r = await axios.get('https://api.semrush.com/', {
-        params: { type: 'domain_organic', key: SEMRUSH_API_KEY, domain, database: 'us', display_limit: limit || 50, export_columns: 'Ph,Po,Pp,Nq,Cp,Co,Kd,Ur,Tr,Tc,Nr,Td' },
+        params: { type: 'domain_organic', key: SEMRUSH_API_KEY, domain, database: pack.semrushDatabase, display_limit: limit || 50, export_columns: 'Ph,Po,Pp,Nq,Cp,Co,Kd,Ur,Tr,Tc,Nr,Td' },
       })
       return parseSemrushCSV(r.data)
     })
@@ -558,11 +658,14 @@ app.get('/api/semrush/domain-keywords', expensiveLimiter, budgetMiddleware('semr
 // ═══════════════════════════════════════════════════════════════════════════════
 
 app.post('/api/dataforseo/serp', expensiveLimiter, budgetMiddleware('dataforseo'), async (req, res) => {
-  const { keyword, location_code, language_code } = req.body
+  const { keyword, location_code, language_code, domain } = req.body || {}
+  const pack = marketFromRequest(req, domain)
+  const loc = location_code || pack.dfsLocationCode
+  const lang = language_code || pack.dfsLanguageCode
   try {
-    const data = await withCache(realtimeCache, `dfs_serp_${keyword}_${location_code}`, async () => {
+    const data = await withCache(realtimeCache, `dfs_serp_${keyword}_${loc}_${lang}`, async () => {
       const r = await axios.post('https://api.dataforseo.com/v3/serp/google/organic/live/advanced',
-        [{ keyword, location_code: location_code || 2840, language_code: language_code || 'en', depth: 10 }],
+        [{ keyword, location_code: loc, language_code: lang, depth: 10 }],
         { headers: { Authorization: `Basic ${DATAFORSEO_AUTH}`, 'Content-Type': 'application/json' } })
       return r.data
     })
@@ -622,11 +725,12 @@ app.post('/api/dataforseo/domain-summary', expensiveLimiter, budgetMiddleware('d
 })
 
 app.post('/api/dataforseo/ranked-keywords', expensiveLimiter, budgetMiddleware('dataforseo'), async (req, res) => {
-  const { target, limit } = req.body
+  const { target, limit } = req.body || {}
+  const pack = marketFromRequest(req, target)
   try {
-    const data = await withCache(realtimeCache, `dfs_rkw_${target}_${limit}`, async () => {
+    const data = await withCache(realtimeCache, `dfs_rkw_${target}_${pack.code}_${limit}`, async () => {
       const r = await axios.post('https://api.dataforseo.com/v3/dataforseo_labs/google/ranked_keywords/live',
-        [{ target, language_name: 'English', location_code: 2840, limit: limit || 50 }],
+        [{ target, language_name: pack.dfsLanguageName, location_code: pack.dfsLocationCode, limit: limit || 50 }],
         { headers: { Authorization: `Basic ${DATAFORSEO_AUTH}`, 'Content-Type': 'application/json' } })
       return r.data
     })
@@ -635,11 +739,12 @@ app.post('/api/dataforseo/ranked-keywords', expensiveLimiter, budgetMiddleware('
 })
 
 app.post('/api/dataforseo/competitors', expensiveLimiter, budgetMiddleware('dataforseo'), async (req, res) => {
-  const { target, limit } = req.body
+  const { target, limit } = req.body || {}
+  const pack = marketFromRequest(req, target)
   try {
-    const data = await withCache(historicalCache, `dfs_comp_${target}_${limit}`, async () => {
+    const data = await withCache(historicalCache, `dfs_comp_${target}_${pack.code}_${limit}`, async () => {
       const r = await axios.post('https://api.dataforseo.com/v3/dataforseo_labs/google/competitors_domain/live',
-        [{ target, language_name: 'English', location_code: 2840, limit: limit || 10 }],
+        [{ target, language_name: pack.dfsLanguageName, location_code: pack.dfsLocationCode, limit: limit || 10 }],
         { headers: { Authorization: `Basic ${DATAFORSEO_AUTH}`, 'Content-Type': 'application/json' } })
       return r.data
     })
@@ -840,14 +945,47 @@ app.post('/api/thorbit/suggestions', expensiveLimiter, budgetMiddleware('thorbit
 // SE RANKING
 // ═══════════════════════════════════════════════════════════════════════════════
 
+async function serankingSafeGet(
+  domain: string,
+  resource: 'overview' | 'keywords' | 'competitors',
+  limit?: string,
+  marketPack?: ReturnType<typeof resolveMarket>,
+) {
+  const pack = marketPack || resolveMarket({ domain })
+  const url = serankingResearchUrl(pack, resource)
+  try {
+    const r = await axios.get(url, {
+      params: resource === 'keywords' ? { domain, limit: limit || 50 } : { domain },
+      headers: { Authorization: `Token ${SE_RANKING_API}` },
+      timeout: 12000,
+      validateStatus: (s) => s < 500,
+    })
+    if (r.status === 403 || r.status === 401 || r.status === 402 || r.status === 429) {
+      return {
+        ok: false,
+        provider: 'seranking',
+        state: 'soft_degraded' as const,
+        softDegraded: true,
+        httpStatus: r.status,
+        market: pack.code,
+        message: `SE Ranking research ${resource} unavailable (HTTP ${r.status}) — other providers still used`,
+        data: null,
+        fetchedAt: new Date().toISOString(),
+      }
+    }
+    if (r.status >= 400) throw new Error(`HTTP ${r.status}`)
+    return { ok: true, provider: 'seranking', state: 'live' as const, market: pack.code, data: r.data, fetchedAt: new Date().toISOString() }
+  } catch (e: any) {
+    return { ...providerUnavailable('seranking', e), market: pack.code, data: null }
+  }
+}
+
 app.get('/api/seranking/domain', expensiveLimiter, budgetMiddleware('seranking'), async (req, res) => {
   const { domain } = req.query as Record<string, string>
+  const pack = marketFromRequest(req, domain)
   try {
-    const data = await withCache(realtimeCache, `ser_domain_${domain}`, async () => {
-      const r = await axios.get('https://api4.seranking.com/research/us/overview/', {
-        params: { domain }, headers: { Authorization: `Token ${SE_RANKING_API}` },
-      })
-      return r.data
+    const data = await withCache(realtimeCache, `ser_domain_${domain}_${pack.serankingRegion}`, async () => {
+      return serankingSafeGet(domain, 'overview', undefined, pack)
     })
     res.json(data)
   } catch (e: any) { res.json(providerUnavailable('seranking', e)) }
@@ -855,12 +993,10 @@ app.get('/api/seranking/domain', expensiveLimiter, budgetMiddleware('seranking')
 
 app.get('/api/seranking/keywords', expensiveLimiter, budgetMiddleware('seranking'), async (req, res) => {
   const { domain, limit } = req.query as Record<string, string>
+  const pack = marketFromRequest(req, domain)
   try {
-    const data = await withCache(realtimeCache, `ser_kw_${domain}_${limit}`, async () => {
-      const r = await axios.get('https://api4.seranking.com/research/us/keywords/', {
-        params: { domain, limit: limit || 50 }, headers: { Authorization: `Token ${SE_RANKING_API}` },
-      })
-      return r.data
+    const data = await withCache(realtimeCache, `ser_kw_${domain}_${pack.serankingRegion}_${limit}`, async () => {
+      return serankingSafeGet(domain, 'keywords', limit, pack)
     })
     res.json(data)
   } catch (e: any) { res.json(providerUnavailable('seranking', e)) }
@@ -868,12 +1004,10 @@ app.get('/api/seranking/keywords', expensiveLimiter, budgetMiddleware('seranking
 
 app.get('/api/seranking/competitors', expensiveLimiter, budgetMiddleware('seranking'), async (req, res) => {
   const { domain } = req.query as Record<string, string>
+  const pack = marketFromRequest(req, domain)
   try {
-    const data = await withCache(historicalCache, `ser_comp_${domain}`, async () => {
-      const r = await axios.get('https://api4.seranking.com/research/us/competitors/', {
-        params: { domain }, headers: { Authorization: `Token ${SE_RANKING_API}` },
-      })
-      return r.data
+    const data = await withCache(historicalCache, `ser_comp_${domain}_${pack.serankingRegion}`, async () => {
+      return serankingSafeGet(domain, 'competitors', undefined, pack)
     })
     res.json(data)
   } catch (e: any) { res.json(providerUnavailable('seranking', e)) }
@@ -884,8 +1018,21 @@ app.get('/api/seranking/backlinks', expensiveLimiter, budgetMiddleware('serankin
   try {
     const data = await withCache(realtimeCache, `ser_bl_${domain}`, async () => {
       const r = await axios.get('https://api4.seranking.com/backlinks/info/', {
-        params: { domain }, headers: { Authorization: `Token ${SE_RANKING_API}` },
+        params: { domain }, headers: { Authorization: `Token ${SE_RANKING_API}` }, timeout: 12000, validateStatus: (s) => s < 500,
       })
+      if (r.status === 403 || r.status === 401 || r.status === 402 || r.status === 429) {
+        return {
+          ok: false,
+          provider: 'seranking',
+          state: 'soft_degraded',
+          softDegraded: true,
+          httpStatus: r.status,
+          message: `SE Ranking backlinks unavailable (HTTP ${r.status})`,
+          data: null,
+          fetchedAt: new Date().toISOString(),
+        }
+      }
+      if (r.status >= 400) throw new Error(`HTTP ${r.status}`)
       return r.data
     })
     res.json(data)
@@ -896,33 +1043,43 @@ app.get('/api/seranking/backlinks', expensiveLimiter, budgetMiddleware('serankin
 // AGGREGATED MULTI-SOURCE ENDPOINTS
 // ═══════════════════════════════════════════════════════════════════════════════
 
-// Overview: combines ALL sources
+// Overview: combines ALL sources (market-aware + snapshot cache fallback)
 app.get('/api/overview', expensiveLimiter, async (req, res) => {
-  const { domain } = req.query as Record<string, string>
+  const { domain, refresh } = req.query as Record<string, string>
+  const pack = marketFromRequest(req, domain)
+  const forceRefresh = refresh === '1' || refresh === 'true'
+  if (!forceRefresh) {
+    const cached = await loadSnapshotPayload(domain, 'overview')
+    if (cached?.data && Object.keys(cached.data.sources || {}).length > 0) {
+      return res.json({ ...cached.data, domain, market: pack, dataState: 'cached', fetchedAt: cached.fetchedAt, fromSnapshot: true })
+    }
+  }
+
   const today = new Date().toISOString().split('T')[0]
-  const result: Record<string, any> = { domain, sources: {}, activeSources: [] }
+  const result: Record<string, any> = {
+    domain,
+    market: pack,
+    sources: {},
+    activeSources: [] as string[],
+    softDegraded: [] as string[],
+    dataState: 'live',
+    fetchedAt: new Date().toISOString(),
+  }
 
   const calls = await Promise.allSettled([
-    // Ahrefs DR + metrics
     axios.get('https://api.ahrefs.com/v3/site-explorer/domain-rating', {
       params: { target: domain, date: today }, headers: { Authorization: `Bearer ${AHREFS_API_KEY}` }, timeout: 10000,
     }),
     axios.get('https://api.ahrefs.com/v3/site-explorer/metrics', {
       params: { target: domain, date: today, mode: 'subdomains' }, headers: { Authorization: `Bearer ${AHREFS_API_KEY}` }, timeout: 10000,
     }),
-    // SEMrush overview
     axios.get('https://api.semrush.com/', {
-      params: { type: 'domain_ranks', key: SEMRUSH_API_KEY, domain, database: 'us', export_columns: 'Dn,Rk,Or,Ot,Oc,Ad,At,Ac' }, timeout: 10000,
+      params: { type: 'domain_ranks', key: SEMRUSH_API_KEY, domain, database: pack.semrushDatabase, export_columns: 'Dn,Rk,Or,Ot,Oc,Ad,At,Ac' }, timeout: 10000,
     }),
-    // DataForSEO domain summary
     axios.post('https://api.dataforseo.com/v3/backlinks/domain_pages_summary/live',
       [{ target: domain, include_subdomains: true }],
       { headers: { Authorization: `Basic ${DATAFORSEO_AUTH}`, 'Content-Type': 'application/json' }, timeout: 10000 }),
-    // SE Ranking overview
-    SE_RANKING_API ? axios.get('https://api4.seranking.com/research/us/overview/', {
-      params: { domain }, headers: { Authorization: `Token ${SE_RANKING_API}` }, timeout: 10000,
-    }) : Promise.reject('No API key'),
-    // Exa — find similar sites
+    SE_RANKING_API ? serankingSafeGet(domain, 'overview', undefined, pack) : Promise.reject('No API key'),
     EXA_API_KEY ? axios.post('https://api.exa.ai/findSimilar', {
       url: `https://${domain}`, numResults: 5,
       contents: { text: { maxCharacters: 200 } },
@@ -945,12 +1102,28 @@ app.get('/api/overview', expensiveLimiter, async (req, res) => {
     if (result.sources.dataforseo) result.activeSources.push('DataForSEO')
   }
   if (seranking.status === 'fulfilled') {
-    result.sources.seranking = seranking.value.data
-    result.activeSources.push('SE Ranking')
+    const ser = seranking.value as any
+    if (ser?.softDegraded || ser?.state === 'soft_degraded') {
+      result.sources.seranking = ser
+      result.softDegraded.push('SE Ranking')
+    } else if (ser?.ok === false) {
+      result.sources.seranking = ser
+      result.softDegraded.push('SE Ranking')
+    } else {
+      result.sources.seranking = ser?.data ?? ser
+      result.activeSources.push('SE Ranking')
+    }
   }
   if (exa.status === 'fulfilled') {
     result.sources.exa = { similarSites: exa.value.data?.results?.slice(0, 5) }
     result.activeSources.push('Exa')
+  }
+
+  if (result.activeSources.length) {
+    void persistSnapshot(domain, 'overview', result)
+    if (result.sources.ahrefs) void persistSnapshot(domain, 'ahrefs', result.sources.ahrefs)
+    if (result.sources.semrush) void persistSnapshot(domain, 'semrush', result.sources.semrush)
+    if (result.sources.dataforseo) void persistSnapshot(domain, 'dataforseo', result.sources.dataforseo)
   }
 
   res.json(result)
@@ -958,9 +1131,26 @@ app.get('/api/overview', expensiveLimiter, async (req, res) => {
 
 // Aggregated keywords from multiple sources
 app.get('/api/keywords/aggregated', expensiveLimiter, async (req, res) => {
-  const { domain, limit } = req.query as Record<string, string>
+  const { domain, limit, refresh } = req.query as Record<string, string>
+  const pack = marketFromRequest(req, domain)
+  const forceRefresh = refresh === '1' || refresh === 'true'
+  if (!forceRefresh) {
+    const cached = await loadSnapshotPayload(domain, 'keywords_agg')
+    if (cached?.data && Object.keys(cached.data.sources || {}).length > 0) {
+      return res.json({ ...cached.data, domain, market: pack, dataState: 'cached', fetchedAt: cached.fetchedAt, fromSnapshot: true })
+    }
+  }
+
   const today = new Date().toISOString().split('T')[0]
-  const result: Record<string, any> = { domain, sources: {}, activeSources: [] }
+  const result: Record<string, any> = {
+    domain,
+    market: pack,
+    sources: {},
+    activeSources: [] as string[],
+    softDegraded: [] as string[],
+    dataState: 'live',
+    fetchedAt: new Date().toISOString(),
+  }
 
   const calls = await Promise.allSettled([
     axios.get('https://api.ahrefs.com/v3/site-explorer/organic-keywords', {
@@ -968,30 +1158,63 @@ app.get('/api/keywords/aggregated', expensiveLimiter, async (req, res) => {
       headers: { Authorization: `Bearer ${AHREFS_API_KEY}` }, timeout: 10000,
     }),
     axios.get('https://api.semrush.com/', {
-      params: { type: 'domain_organic', key: SEMRUSH_API_KEY, domain, database: 'us', display_limit: limit || 50, export_columns: 'Ph,Po,Pp,Nq,Cp,Co,Kd,Ur,Tr,Tc,Nr,Td' },
+      params: { type: 'domain_organic', key: SEMRUSH_API_KEY, domain, database: pack.semrushDatabase, display_limit: limit || 50, export_columns: 'Ph,Po,Pp,Nq,Cp,Co,Kd,Ur,Tr,Tc,Nr,Td' },
       timeout: 10000,
     }),
     axios.post('https://api.dataforseo.com/v3/dataforseo_labs/google/ranked_keywords/live',
-      [{ target: domain, language_name: 'English', location_code: 2840, limit: Number(limit) || 50 }],
+      [{ target: domain, language_name: pack.dfsLanguageName, location_code: pack.dfsLocationCode, limit: Number(limit) || 50 }],
       { headers: { Authorization: `Basic ${DATAFORSEO_AUTH}`, 'Content-Type': 'application/json' }, timeout: 10000 }),
-    SE_RANKING_API ? axios.get('https://api4.seranking.com/research/us/keywords/', {
-      params: { domain, limit: limit || 50 }, headers: { Authorization: `Token ${SE_RANKING_API}` }, timeout: 10000,
-    }) : Promise.reject('No API key'),
+    SE_RANKING_API ? serankingSafeGet(domain, 'keywords', limit, pack) : Promise.reject('No API key'),
   ])
 
   const [ahrefs, semrush, dataforseo, seranking] = calls
   if (ahrefs.status === 'fulfilled') { result.sources.ahrefs = ahrefs.value.data; result.activeSources.push('Ahrefs') }
   if (semrush.status === 'fulfilled') { result.sources.semrush = parseSemrushCSV(semrush.value.data); result.activeSources.push('SEMrush') }
   if (dataforseo.status === 'fulfilled') { result.sources.dataforseo = dataforseo.value.data; result.activeSources.push('DataForSEO') }
-  if (seranking.status === 'fulfilled') { result.sources.seranking = seranking.value.data; result.activeSources.push('SE Ranking') }
+  if (seranking.status === 'fulfilled') {
+    const ser = seranking.value as any
+    if (ser?.softDegraded || ser?.state === 'soft_degraded' || ser?.ok === false) {
+      result.sources.seranking = ser
+      result.softDegraded.push('SE Ranking')
+    } else {
+      result.sources.seranking = ser?.data ?? ser
+      result.activeSources.push('SE Ranking')
+    }
+  }
 
+  const keywords = mergeKeywordRows([
+    keywordsFromSemrush(result.sources.semrush),
+    keywordsFromAhrefs(result.sources.ahrefs),
+    keywordsFromDataForSEO(result.sources.dataforseo),
+  ])
+  result.normalized = keywords
+  result.movements = keywordMovements(keywords)
+
+  if (result.activeSources.length) void persistSnapshot(domain, 'keywords_agg', result)
   res.json(result)
 })
 
 // Aggregated backlinks from multiple sources
 app.get('/api/backlinks/aggregated', expensiveLimiter, async (req, res) => {
-  const { domain } = req.query as Record<string, string>
-  const result: Record<string, any> = { domain, sources: {}, activeSources: [] }
+  const { domain, refresh } = req.query as Record<string, string>
+  const pack = marketFromRequest(req, domain)
+  const forceRefresh = refresh === '1' || refresh === 'true'
+  if (!forceRefresh) {
+    const cached = await loadSnapshotPayload(domain, 'backlinks_agg')
+    if (cached?.data && Object.keys(cached.data.sources || {}).length > 0) {
+      return res.json({ ...cached.data, domain, market: pack, dataState: 'cached', fetchedAt: cached.fetchedAt, fromSnapshot: true })
+    }
+  }
+
+  const result: Record<string, any> = {
+    domain,
+    market: pack,
+    sources: {},
+    activeSources: [] as string[],
+    softDegraded: [] as string[],
+    dataState: 'live',
+    fetchedAt: new Date().toISOString(),
+  }
 
   const calls = await Promise.allSettled([
     axios.get('https://api.ahrefs.com/v3/site-explorer/backlinks-stats', {
@@ -1003,14 +1226,22 @@ app.get('/api/backlinks/aggregated', expensiveLimiter, async (req, res) => {
     axios.post('https://api.dataforseo.com/v3/backlinks/domain_pages_summary/live',
       [{ target: domain, include_subdomains: true }],
       { headers: { Authorization: `Basic ${DATAFORSEO_AUTH}`, 'Content-Type': 'application/json' }, timeout: 10000 }),
-    SE_RANKING_API ? axios.get('https://api4.seranking.com/backlinks/info/', {
-      params: { domain }, headers: { Authorization: `Token ${SE_RANKING_API}` }, timeout: 10000,
-    }) : Promise.reject('No API key'),
+    SE_RANKING_API
+      ? axios.get('https://api4.seranking.com/backlinks/info/', {
+          params: { domain }, headers: { Authorization: `Token ${SE_RANKING_API}` }, timeout: 10000, validateStatus: (s) => s < 500,
+        }).then((r) => {
+          if (r.status === 403 || r.status === 401 || r.status === 402 || r.status === 429) {
+            return { softDegraded: true, state: 'soft_degraded', httpStatus: r.status, ok: false, provider: 'seranking', data: null }
+          }
+          if (r.status >= 400) throw new Error(`HTTP ${r.status}`)
+          return r.data
+        })
+      : Promise.reject('No API key'),
   ])
 
   const [ahrefsStats, ahrefsRD, dataforseo, seranking] = calls
   if (ahrefsStats.status === 'fulfilled') {
-    result.sources.ahrefs = { stats: ahrefsStats.value.data }
+    result.sources.ahrefs = { stats: ahrefsStats.value.data ?? ahrefsStats.value }
     if (ahrefsRD.status === 'fulfilled') result.sources.ahrefs.refdomains = ahrefsRD.value.data
     result.activeSources.push('Ahrefs')
   }
@@ -1018,8 +1249,18 @@ app.get('/api/backlinks/aggregated', expensiveLimiter, async (req, res) => {
     result.sources.dataforseo = dataforseo.value.data?.tasks?.[0]?.result?.[0]
     if (result.sources.dataforseo) result.activeSources.push('DataForSEO')
   }
-  if (seranking.status === 'fulfilled') { result.sources.seranking = seranking.value.data; result.activeSources.push('SE Ranking') }
+  if (seranking.status === 'fulfilled') {
+    const ser = seranking.value as any
+    if (ser?.softDegraded || ser?.state === 'soft_degraded') {
+      result.sources.seranking = ser
+      result.softDegraded.push('SE Ranking')
+    } else {
+      result.sources.seranking = ser
+      result.activeSources.push('SE Ranking')
+    }
+  }
 
+  if (result.activeSources.length) void persistSnapshot(domain, 'backlinks_agg', result)
   res.json(result)
 })
 
@@ -1056,20 +1297,35 @@ app.post('/api/vitals/aggregated', expensiveLimiter, async (req, res) => {
 
 // Aggregated competitors from multiple sources
 app.get('/api/competitors/aggregated', expensiveLimiter, async (req, res) => {
-  const { domain } = req.query as Record<string, string>
-  const result: Record<string, any> = { domain, sources: {}, activeSources: [] }
+  const { domain, refresh } = req.query as Record<string, string>
+  const pack = marketFromRequest(req, domain)
+  const forceRefresh = refresh === '1' || refresh === 'true'
+  if (!forceRefresh) {
+    const cached = await loadSnapshotPayload(domain, 'competitors_agg')
+    if (cached?.data && Object.keys(cached.data.sources || {}).length > 0) {
+      return res.json({ ...cached.data, domain, market: pack, dataState: 'cached', fetchedAt: cached.fetchedAt, fromSnapshot: true })
+    }
+  }
+
+  const result: Record<string, any> = {
+    domain,
+    market: pack,
+    sources: {},
+    activeSources: [] as string[],
+    softDegraded: [] as string[],
+    dataState: 'live',
+    fetchedAt: new Date().toISOString(),
+  }
 
   const calls = await Promise.allSettled([
     axios.get('https://api.semrush.com/', {
-      params: { type: 'domain_organic_organic', key: SEMRUSH_API_KEY, domain, database: 'us', display_limit: 10, export_columns: 'Dn,Cr,Np,Or,Ot,Oc,Ad' },
+      params: { type: 'domain_organic_organic', key: SEMRUSH_API_KEY, domain, database: pack.semrushDatabase, display_limit: 10, export_columns: 'Dn,Cr,Np,Or,Ot,Oc,Ad' },
       timeout: 10000,
     }),
     axios.post('https://api.dataforseo.com/v3/dataforseo_labs/google/competitors_domain/live',
-      [{ target: domain, language_name: 'English', location_code: 2840, limit: 10 }],
+      [{ target: domain, language_name: pack.dfsLanguageName, location_code: pack.dfsLocationCode, limit: 10 }],
       { headers: { Authorization: `Basic ${DATAFORSEO_AUTH}`, 'Content-Type': 'application/json' }, timeout: 10000 }),
-    SE_RANKING_API ? axios.get('https://api4.seranking.com/research/us/competitors/', {
-      params: { domain }, headers: { Authorization: `Token ${SE_RANKING_API}` }, timeout: 10000,
-    }) : Promise.reject('No API key'),
+    SE_RANKING_API ? serankingSafeGet(domain, 'competitors', undefined, pack) : Promise.reject('No API key'),
     EXA_API_KEY ? axios.post('https://api.exa.ai/findSimilar', {
       url: `https://${domain}`, numResults: 10,
       contents: { text: { maxCharacters: 300 }, highlights: { numSentences: 2 } },
@@ -1079,9 +1335,38 @@ app.get('/api/competitors/aggregated', expensiveLimiter, async (req, res) => {
   const [semrush, dataforseo, seranking, exa] = calls
   if (semrush.status === 'fulfilled') { result.sources.semrush = parseSemrushCSV(semrush.value.data); result.activeSources.push('SEMrush') }
   if (dataforseo.status === 'fulfilled') { result.sources.dataforseo = dataforseo.value.data; result.activeSources.push('DataForSEO') }
-  if (seranking.status === 'fulfilled') { result.sources.seranking = seranking.value.data; result.activeSources.push('SE Ranking') }
+  if (seranking.status === 'fulfilled') {
+    const ser = seranking.value as any
+    if (ser?.softDegraded || ser?.state === 'soft_degraded' || ser?.ok === false) {
+      result.sources.seranking = ser
+      result.softDegraded.push('SE Ranking')
+    } else {
+      result.sources.seranking = ser?.data ?? ser
+      result.activeSources.push('SE Ranking')
+    }
+  }
   if (exa.status === 'fulfilled') { result.sources.exa = exa.value.data?.results; result.activeSources.push('Exa') }
 
+  const competitors = mergeCompetitors([
+    competitorsFromSemrush(result.sources.semrush),
+    competitorsFromDataForSEO(result.sources.dataforseo),
+    competitorsFromExa(result.sources.exa),
+  ])
+  result.normalized = competitors
+
+  // Prefer keyword inventory from keywords snapshot when available for better gap estimates
+  let ourKeywords: KeywordRow[] = []
+  try {
+    const kwSnap = await loadSnapshotPayload(domain, 'keywords_agg')
+    if (Array.isArray(kwSnap?.data?.normalized)) {
+      ourKeywords = kwSnap.data.normalized as KeywordRow[]
+    }
+  } catch {
+    ourKeywords = []
+  }
+  result.gaps = computeCompetitorGaps(ourKeywords, competitors)
+
+  if (result.activeSources.length) void persistSnapshot(domain, 'competitors_agg', result)
   res.json(result)
 })
 
@@ -1187,8 +1472,9 @@ const seedProjects: SeedProject[] = [
 
 type ProjectListResult = {
   projects: ReturnType<typeof buildProjectSummaries>
-  source: 'supabase' | 'local-seed'
+  source: 'supabase' | 'local-seed' | 'empty'
   fetchedAt: string
+  warning?: string
 }
 
 function normalizeProjectStatus(value: unknown): ProjectStatus {
@@ -1249,7 +1535,8 @@ async function loadProjectList(): Promise<ProjectListResult> {
             clientName,
             name: row.name || clientName,
             domain: row.domain,
-            market: row.market || 'Unassigned market',
+            // IL default for this agency: empty market rows inherit domain-based resolution
+            market: row.market || resolveMarket({ domain: row.domain }).label,
             status: normalizeProjectStatus(row.status),
             priority: normalizeProjectPriority(row.priority),
             screenshotUrl: row.screenshot_url || undefined,
@@ -1264,6 +1551,17 @@ async function loadProjectList(): Promise<ProjectListResult> {
       }
     } catch (err) {
       console.error('[projects] Supabase project load threw, falling back to local seed:', err)
+    }
+  }
+
+  // Never ship demo/local seed domains to production operators.
+  if (!ALLOW_LOCAL_SEED) {
+    console.error('[projects] Supabase empty/unavailable in production — returning empty portfolio (no local seed).')
+    return {
+      projects: [],
+      source: 'empty',
+      fetchedAt: new Date().toISOString(),
+      warning: 'No durable project spine. Configure SUPABASE_SERVICE_ROLE and seo_domains — demo domains are disabled in production.',
     }
   }
 
@@ -1421,6 +1719,17 @@ app.get('/api/tasks', async (req, res) => {
     }
   }
 
+  // Prod: never invent fake investigation tasks from synthetic alerts.
+  if (IS_PROD || !ALLOW_LOCAL_SEED) {
+    return res.json({
+      tasks: [],
+      source: 'empty',
+      dataState: 'unavailable',
+      message: 'No durable tasks for this domain. Run Sync spine to generate from live alerts.',
+      fetchedAt: new Date().toISOString(),
+    })
+  }
+
   const seedAlerts = generateAlerts({
     domain: cleanDomain,
     previousOrganicTraffic: 1000,
@@ -1431,6 +1740,7 @@ app.get('/api/tasks', async (req, res) => {
   res.json({
     tasks: seedAlerts.map(createSeoTaskFromAlert),
     source: 'rules-engine',
+    dataState: 'demo',
     fetchedAt: new Date().toISOString(),
   })
 })
@@ -1467,12 +1777,111 @@ app.get('/api/command-center', async (_req, res) => {
       taskCount: p.taskCount,
       lastFetchedAt: p.lastFetchedAt,
       status: p.status,
+      market: p.market,
     }))
   const hottestAlerts = [...projects]
     .filter((p) => (p.alertCount || 0) > 0)
     .sort((a, b) => (b.alertCount || 0) - (a.alertCount || 0))
     .slice(0, 8)
     .map((p) => ({ domain: p.domain, alertCount: p.alertCount, taskCount: p.taskCount, healthScore: p.healthScore }))
+
+  // Command Center v2: surface real keyword movements + competitor gaps from snapshots (no invented demo).
+  type MovementItem = { domain: string; keyword: string; position: number | null; previousPosition?: number | null; trend?: string | null; volume?: number | null; source?: string }
+  type GapItem = { domain: string; competitor: string; ourMissingEstimate: number | null; note?: string }
+  const movements: { improved: MovementItem[]; declined: MovementItem[]; newEntries: MovementItem[] } = {
+    improved: [],
+    declined: [],
+    newEntries: [],
+  }
+  const gaps: GapItem[] = []
+  const softDegraded: Array<{ domain: string; providers: string[] }> = []
+
+  // Prefer worst + high-activity domains first so the board stays operator-relevant.
+  const focusDomains = [
+    ...worst.map((w) => w.domain),
+    ...hottestAlerts.map((h) => h.domain),
+    ...projects.filter((p) => p.lastFetchedAt).map((p) => p.domain),
+  ]
+  const uniqueFocus = [...new Set(focusDomains)].slice(0, 12)
+
+  await Promise.all(
+    uniqueFocus.map(async (domain) => {
+      try {
+        const [kwSnap, compSnap] = await Promise.all([
+          loadSnapshotPayload(domain, 'keywords_agg'),
+          loadSnapshotPayload(domain, 'competitors_agg'),
+        ])
+        const kwData = kwSnap?.data || {}
+        const compData = compSnap?.data || {}
+        const degraded = [
+          ...(Array.isArray(kwData.softDegraded) ? kwData.softDegraded : []),
+          ...(Array.isArray(compData.softDegraded) ? compData.softDegraded : []),
+        ]
+        if (degraded.length) softDegraded.push({ domain, providers: [...new Set(degraded)] })
+
+        let mv = kwData.movements
+        const normalized = Array.isArray(kwData.normalized) ? (kwData.normalized as KeywordRow[]) : []
+        if (!mv && normalized.length) mv = keywordMovements(normalized)
+        if (mv) {
+          for (const row of (mv.improved || []).slice(0, 5)) {
+            movements.improved.push({
+              domain,
+              keyword: row.keyword,
+              position: row.position ?? null,
+              previousPosition: row.previousPosition ?? null,
+              trend: row.trend,
+              volume: row.volume ?? null,
+              source: row.source,
+            })
+          }
+          for (const row of (mv.declined || []).slice(0, 5)) {
+            movements.declined.push({
+              domain,
+              keyword: row.keyword,
+              position: row.position ?? null,
+              previousPosition: row.previousPosition ?? null,
+              trend: row.trend,
+              volume: row.volume ?? null,
+              source: row.source,
+            })
+          }
+          for (const row of (mv.newEntries || []).slice(0, 5)) {
+            movements.newEntries.push({
+              domain,
+              keyword: row.keyword,
+              position: row.position ?? null,
+              previousPosition: row.previousPosition ?? null,
+              trend: row.trend,
+              volume: row.volume ?? null,
+              source: row.source,
+            })
+          }
+        }
+
+        let domainGaps = Array.isArray(compData.gaps) ? compData.gaps : null
+        if (!domainGaps) {
+          const competitors = Array.isArray(compData.normalized) ? compData.normalized : []
+          domainGaps = computeCompetitorGaps(normalized, competitors)
+        }
+        for (const g of (domainGaps || []).slice(0, 4)) {
+          gaps.push({
+            domain,
+            competitor: g.competitor,
+            ourMissingEstimate: g.ourMissingEstimate ?? null,
+            note: g.note,
+          })
+        }
+      } catch (err) {
+        console.error('[command-center] snapshot enrich failed for', domain, err)
+      }
+    }),
+  )
+
+  // Rank dropped keywords first for operator triage.
+  movements.declined.sort((a, b) => (b.volume || 0) - (a.volume || 0))
+  movements.improved.sort((a, b) => (b.volume || 0) - (a.volume || 0))
+  movements.newEntries.sort((a, b) => (b.volume || 0) - (a.volume || 0))
+  gaps.sort((a, b) => (b.ourMissingEstimate || 0) - (a.ourMissingEstimate || 0))
 
   res.json({
     kpis: {
@@ -1484,10 +1893,20 @@ app.get('/api/command-center', async (_req, res) => {
       stale,
       byStatus,
       serviceRole: Boolean(supabaseAdmin),
+      movementSignals: movements.declined.length + movements.improved.length + movements.newEntries.length,
+      gapSignals: gaps.length,
     },
     worst,
     hottestAlerts,
+    movements: {
+      improved: movements.improved.slice(0, 12),
+      declined: movements.declined.slice(0, 12),
+      newEntries: movements.newEntries.slice(0, 12),
+    },
+    gaps: gaps.slice(0, 15),
+    softDegraded: softDegraded.slice(0, 10),
     source: result.source,
+    warning: result.warning || null,
     fetchedAt: result.fetchedAt,
   })
 })
@@ -1648,38 +2067,235 @@ app.post('/api/bridges/asana', expensiveLimiter, async (req, res) => {
   res.status(result.ok ? 200 : result.skipped ? 202 : 502).json(result)
 })
 
-app.post('/api/reports/preview', validateBody(z.object({
-  domain: domainSchema,
-  sections: z.array(z.object({ title: z.string().min(1), body: z.string().min(1) })).min(1),
-})), (req, res) => {
-  const report = renderReportMarkdown((req as any).validatedBody)
-  res.type('text/markdown').send(report)
+// In-memory share tokens (prod can move to Supabase later). TTL 7 days.
+type ShareRecord = {
+  id: string
+  domain: string
+  locale: ReportLocale
+  template: ReportTemplateId
+  markdown: string
+  html: string
+  createdAt: string
+  expiresAt: string
+}
+const reportShares = new Map<string, ShareRecord>()
+const SHARE_TTL_MS = 7 * 24 * 60 * 60 * 1000
+
+function pruneExpiredShares() {
+  const now = Date.now()
+  for (const [id, rec] of reportShares) {
+    if (Date.parse(rec.expiresAt) < now) reportShares.delete(id)
+  }
+}
+
+function buildReportPayload(body: {
+  domain: string
+  locale?: ReportLocale
+  template?: ReportTemplateId
+  market?: string | null
+  clientName?: string | null
+  sections?: Array<{ title: string; body: string }>
+}) {
+  const domain = String(body.domain || '').replace(/^https?:\/\//, '').replace(/\/$/, '')
+  const locale: ReportLocale = body.locale === 'en' ? 'en' : 'he'
+  const template = (body.template || 'monthly') as ReportTemplateId
+  const pack = resolveMarket({ domain, market: body.market || null })
+  const sections =
+    body.sections && body.sections.length
+      ? body.sections
+      : defaultSectionsForTemplate({
+          domain,
+          locale,
+          template,
+          market: body.market || pack.label,
+          clientName: body.clientName || null,
+        })
+  const input = {
+    domain,
+    locale,
+    template,
+    market: body.market || pack.label,
+    clientName: body.clientName || null,
+    sections,
+    generatedAt: new Date().toISOString(),
+  }
+  return {
+    input,
+    markdown: renderReportMarkdown(input),
+    html: renderReportHtml(input),
+    templates: REPORT_TEMPLATES,
+  }
+}
+
+app.get('/api/reports/templates', (_req, res) => {
+  res.json({ templates: REPORT_TEMPLATES, defaultLocale: 'he', defaultTemplate: 'monthly' })
 })
 
-app.get('/api/local-seo/overview', (req, res) => {
-  const { domain = 'maximo-seo.ai' } = req.query as Record<string, string>
-  res.json({
-    domain,
-    source: 'planned-module',
-    checks: [
-      { name: 'GBP health', status: 'planned', detail: 'Connect Google Business Profile or Local Falcon grid data.' },
-      { name: 'Reviews velocity', status: 'planned', detail: 'Track review count, rating and response SLA.' },
-      { name: 'NAP consistency', status: 'planned', detail: 'Compare business identity across citations.' },
-    ],
-  })
+app.post(
+  '/api/reports/preview',
+  validateBody(
+    z.object({
+      domain: domainSchema,
+      locale: z.enum(['en', 'he']).optional(),
+      template: z.enum(['weekly', 'monthly', 'executive', 'local-geo']).optional(),
+      market: z.string().max(80).optional().nullable(),
+      clientName: z.string().max(120).optional().nullable(),
+      format: z.enum(['md', 'html', 'json']).optional(),
+      sections: z.array(z.object({ title: z.string().min(1), body: z.string().min(1) })).optional(),
+    }),
+  ),
+  (req, res) => {
+    const body = (req as any).validatedBody as {
+      domain: string
+      locale?: ReportLocale
+      template?: ReportTemplateId
+      market?: string | null
+      clientName?: string | null
+      format?: 'md' | 'html' | 'json'
+      sections?: Array<{ title: string; body: string }>
+    }
+    const built = buildReportPayload(body)
+    const format = body.format || (body.sections?.length ? 'md' : 'json')
+    if (format === 'md') return res.type('text/markdown; charset=utf-8').send(built.markdown)
+    if (format === 'html') return res.type('text/html; charset=utf-8').send(built.html)
+    return res.json({
+      ...built.input,
+      markdown: built.markdown,
+      html: built.html,
+      templates: built.templates,
+    })
+  },
+)
+
+app.post(
+  '/api/reports/share',
+  expensiveLimiter,
+  validateBody(
+    z.object({
+      domain: domainSchema,
+      locale: z.enum(['en', 'he']).optional(),
+      template: z.enum(['weekly', 'monthly', 'executive', 'local-geo']).optional(),
+      market: z.string().max(80).optional().nullable(),
+      clientName: z.string().max(120).optional().nullable(),
+      sections: z.array(z.object({ title: z.string().min(1), body: z.string().min(1) })).optional(),
+    }),
+  ),
+  (req, res) => {
+    pruneExpiredShares()
+    const body = (req as any).validatedBody
+    const built = buildReportPayload(body)
+    const id = `shr_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`
+    const createdAt = new Date().toISOString()
+    const expiresAt = new Date(Date.now() + SHARE_TTL_MS).toISOString()
+    reportShares.set(id, {
+      id,
+      domain: built.input.domain,
+      locale: built.input.locale || 'he',
+      template: built.input.template || 'monthly',
+      markdown: built.markdown,
+      html: built.html,
+      createdAt,
+      expiresAt,
+    })
+    const base = `${req.protocol}://${req.get('host')}`
+    res.status(201).json({
+      id,
+      createdAt,
+      expiresAt,
+      path: `/api/reports/share/${id}`,
+      htmlUrl: `${base}/api/reports/share/${id}?format=html`,
+      markdownUrl: `${base}/api/reports/share/${id}?format=md`,
+      domain: built.input.domain,
+      locale: built.input.locale,
+      template: built.input.template,
+    })
+  },
+)
+
+app.get('/api/reports/share/:id', (req, res) => {
+  pruneExpiredShares()
+  const rec = reportShares.get(String(req.params.id || ''))
+  if (!rec) return res.status(404).json({ error: 'Share link not found or expired' })
+  if (Date.parse(rec.expiresAt) < Date.now()) {
+    reportShares.delete(rec.id)
+    return res.status(410).json({ error: 'Share link expired' })
+  }
+  const format = String((req.query as any).format || 'html').toLowerCase()
+  if (format === 'md' || format === 'markdown') {
+    return res.type('text/markdown; charset=utf-8').send(rec.markdown)
+  }
+  if (format === 'json') {
+    return res.json({
+      id: rec.id,
+      domain: rec.domain,
+      locale: rec.locale,
+      template: rec.template,
+      createdAt: rec.createdAt,
+      expiresAt: rec.expiresAt,
+      markdown: rec.markdown,
+    })
+  }
+  return res.type('text/html; charset=utf-8').send(rec.html)
 })
 
-app.get('/api/geo-ai/overview', (req, res) => {
-  const { domain = 'maximo-seo.ai' } = req.query as Record<string, string>
-  res.json({
-    domain,
-    source: 'planned-module',
-    checks: [
-      { name: 'AI Overview visibility', status: 'planned' },
-      { name: 'Entity completeness', status: 'planned' },
-      { name: 'Citation opportunities', status: 'planned' },
-    ],
-  })
+app.get('/api/local-seo/overview', async (req, res) => {
+  const domain = String((req.query as any).domain || 'maximo-seo.ai').replace(/^https?:\/\//, '').replace(/\/$/, '')
+  const market = (req.query as any).market || null
+  try {
+    const kwSnap = await loadSnapshotPayload(domain, 'keywords_agg')
+    const normalized = Array.isArray(kwSnap?.data?.normalized) ? kwSnap!.data.normalized : []
+    const signals = summarizeKeywordSerpSignals(normalized)
+    const softDegraded = [
+      ...(Array.isArray(kwSnap?.data?.softDegraded) ? kwSnap!.data.softDegraded : []),
+    ]
+    const payload = buildLocalSeoOverview({
+      domain,
+      market,
+      snapshotMeta: {
+        keywordsCount: signals.keywordsCount,
+        rankingLocalFeatures: signals.rankingLocalFeatures,
+        lastFetchedAt: kwSnap?.fetchedAt || null,
+        softDegraded,
+      },
+    })
+    res.json(payload)
+  } catch (err) {
+    console.error('[local-seo]', err)
+    res.json(
+      buildLocalSeoOverview({
+        domain,
+        market,
+      }),
+    )
+  }
+})
+
+app.get('/api/geo-ai/overview', async (req, res) => {
+  const domain = String((req.query as any).domain || 'maximo-seo.ai').replace(/^https?:\/\//, '').replace(/\/$/, '')
+  const market = (req.query as any).market || null
+  try {
+    const kwSnap = await loadSnapshotPayload(domain, 'keywords_agg')
+    const normalized = Array.isArray(kwSnap?.data?.normalized) ? kwSnap!.data.normalized : []
+    const signals = summarizeKeywordSerpSignals(normalized)
+    const softDegraded = [
+      ...(Array.isArray(kwSnap?.data?.softDegraded) ? kwSnap!.data.softDegraded : []),
+    ]
+    const payload = buildGeoAiOverview({
+      domain,
+      market,
+      snapshotMeta: {
+        keywordsCount: signals.keywordsCount,
+        aiOverviewCount: signals.aiOverviewCount,
+        lastFetchedAt: kwSnap?.fetchedAt || null,
+        softDegraded,
+        topKeywords: signals.topKeywords,
+      },
+    })
+    res.json(payload)
+  } catch (err) {
+    console.error('[geo-ai]', err)
+    res.json(buildGeoAiOverview({ domain, market }))
+  }
 })
 
 // ═══════════════════════════════════════════════════════════════════════════════

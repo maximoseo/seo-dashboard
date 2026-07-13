@@ -99,7 +99,27 @@ export interface PageSpeedData {
 
 export interface AggregatedKeywords {
   activeSources: string[]
-  keywords: Array<{
+  softDegraded?: string[]
+  market?: { code?: string; label?: string; semrushDatabase?: string } | null
+  normalized?: Array<{
+    keyword: string
+    volume: number | null
+    position: number | null
+    previousPosition?: number | null
+    url: string | null
+    difficulty: number | null
+    cpc: number | null
+    traffic: number | null
+    source: string
+    trend?: string | null
+  }>
+  movements?: {
+    improved?: any[]
+    declined?: any[]
+    newEntries?: any[]
+    lost?: any[]
+  }
+  keywords?: Array<{
     keyword: string
     volume: number | null
     position: number | null
@@ -112,7 +132,9 @@ export interface AggregatedKeywords {
     serpFeatures?: string[]
     intent?: string
   }>
-  totalCount: number
+  totalCount?: number
+  dataState?: string
+  fetchedAt?: string
 }
 
 export interface AggregatedBacklinks {
@@ -154,13 +176,31 @@ export interface AggregatedVitals {
 
 export interface AggregatedCompetitors {
   activeSources: string[]
-  competitors: Array<{
+  softDegraded?: string[]
+  market?: { code?: string; label?: string; semrushDatabase?: string } | null
+  normalized?: Array<{
+    domain: string
+    commonKeywords?: number | null
+    traffic?: number | null
+    competitionLevel?: number | null
+    relevance?: number | null
+    topCountry?: string | null
+    source: string
+  }>
+  gaps?: Array<{
+    competitor: string
+    ourMissingEstimate?: number | null
+    note?: string
+  }>
+  competitors?: Array<{
     domain: string
     commonKeywords?: number
     organicTraffic?: number
     dr?: number
     source: string
   }>
+  dataState?: string
+  fetchedAt?: string
 }
 
 export interface ContentAnalysis {
@@ -207,20 +247,26 @@ export interface ApiHealthStatus {
 
 // ─── Core API calls ───────────────────────────────────────────────────────────
 
-export async function fetchOverview(domain: string): Promise<OverviewData> {
-  return apiFetch<OverviewData>(`/api/overview?domain=${encodeURIComponent(domain)}`)
+export async function fetchOverview(domain: string, market?: string | null): Promise<OverviewData> {
+  const params = new URLSearchParams({ domain })
+  if (market?.trim()) params.set('market', market.trim())
+  return apiFetch<OverviewData>(`/api/overview?${params.toString()}`)
 }
 
 export async function fetchPageSpeed(url: string, strategy: 'mobile' | 'desktop' = 'mobile'): Promise<PageSpeedData> {
   return apiFetch<PageSpeedData>(`/api/pagespeed?url=${encodeURIComponent(url)}&strategy=${strategy}`)
 }
 
-export async function fetchSemrushOverview(domain: string) {
-  return apiFetch<Record<string, string>>(`/api/semrush/domain-overview?domain=${encodeURIComponent(domain)}`)
+export async function fetchSemrushOverview(domain: string, market?: string | null) {
+  const params = new URLSearchParams({ domain })
+  if (market?.trim()) params.set('market', market.trim())
+  return apiFetch<Record<string, string>>(`/api/semrush/domain-overview?${params.toString()}`)
 }
 
-export async function fetchSemrushCompetitors(domain: string) {
-  return apiFetch<Record<string, string>[]>(`/api/semrush/competitors?domain=${encodeURIComponent(domain)}`)
+export async function fetchSemrushCompetitors(domain: string, market?: string | null) {
+  const params = new URLSearchParams({ domain })
+  if (market?.trim()) params.set('market', market.trim())
+  return apiFetch<Record<string, string>[]>(`/api/semrush/competitors?${params.toString()}`)
 }
 
 export async function fetchDataForSeoBacklinks(target: string, limit = 50) {
@@ -241,8 +287,10 @@ export async function fetchDataForSeoDomainSummary(target: string) {
 
 // ─── Aggregated multi-source endpoints ────────────────────────────────────────
 
-export async function fetchAggregatedKeywords(domain: string, limit = 50): Promise<AggregatedKeywords> {
-  return apiFetch<AggregatedKeywords>(`/api/keywords/aggregated?domain=${encodeURIComponent(domain)}&limit=${limit}`)
+export async function fetchAggregatedKeywords(domain: string, limit = 50, market?: string | null): Promise<AggregatedKeywords> {
+  const params = new URLSearchParams({ domain, limit: String(limit) })
+  if (market?.trim()) params.set('market', market.trim())
+  return apiFetch<AggregatedKeywords>(`/api/keywords/aggregated?${params.toString()}`)
 }
 
 export async function fetchAggregatedBacklinks(domain: string, limit = 50): Promise<AggregatedBacklinks> {
@@ -257,8 +305,10 @@ export async function fetchAggregatedVitals(domain: string): Promise<AggregatedV
   })
 }
 
-export async function fetchAggregatedCompetitors(domain: string): Promise<AggregatedCompetitors> {
-  return apiFetch<AggregatedCompetitors>(`/api/competitors/aggregated?domain=${encodeURIComponent(domain)}`, {
+export async function fetchAggregatedCompetitors(domain: string, market?: string | null): Promise<AggregatedCompetitors> {
+  const params = new URLSearchParams({ domain })
+  if (market?.trim()) params.set('market', market.trim())
+  return apiFetch<AggregatedCompetitors>(`/api/competitors/aggregated?${params.toString()}`, {
     cacheTtl: CACHE_TTL_HISTORICAL,
   })
 }

@@ -4,6 +4,7 @@ import { useQuery } from '@tanstack/react-query'
 import { DataCard } from '@/components/DataCard'
 import DataStateBadge from '@/components/DataStateBadge'
 import { useSEO } from '@/contexts/SEOContext'
+import { useProject } from '@/contexts/ProjectContext'
 import { authFetch } from '@/lib/authToken'
 
 interface Competitor {
@@ -16,13 +17,28 @@ interface Competitor {
   source: string
 }
 
-async function fetchCompetitors(domain: string) {
-  const res = await authFetch(`/api/competitors/aggregated?domain=${encodeURIComponent(domain)}`)
+async function fetchCompetitors(domain: string, market?: string | null) {
+  const params = new URLSearchParams({ domain })
+  if (market?.trim()) params.set('market', market.trim())
+  const res = await authFetch(`/api/competitors/aggregated?${params.toString()}`)
   if (!res.ok) throw new Error(`Competitors API failed: ${res.status}`)
   return res.json()
 }
 
 function normalizeCompetitors(data: any): Competitor[] {
+  // Prefer server-normalized competitors when present
+  if (Array.isArray(data?.normalized) && data.normalized.length) {
+    return data.normalized.map((row: any) => ({
+      domain: row.domain || '',
+      commonKeywords: row.commonKeywords ?? 0,
+      traffic: row.traffic ?? 0,
+      trafficValue: 0,
+      topCountry: row.topCountry || '',
+      relevance: row.relevance ?? row.competitionLevel ?? 0,
+      source: row.source || 'merged',
+    }))
+  }
+
   const competitors: Competitor[] = []
 
   // DataForSEO format
@@ -43,8 +59,9 @@ function normalizeCompetitors(data: any): Competitor[] {
 
   // SEMrush CSV format
   if (data?.sources?.semrush && Array.isArray(data.sources.semrush)) {
-    data.sources.semrush.forEach((row: string[]) => {
-      if (row.length >= 4) {
+    data.sources.semrush.forEach((row: any) => {
+      // Accept row-object from parseSemrushCSV or legacy string[]
+      if (Array.isArray(row) && row.length >= 4) {
         const existing = competitors.find(c => c.domain === row[0])
         if (!existing) {
           competitors.push({
@@ -57,6 +74,21 @@ function normalizeCompetitors(data: any): Competitor[] {
             source: 'SEMrush',
           })
         }
+      } else if (row && typeof row === 'object') {
+        const domain = row.Dn || row.Domain || row.domain || ''
+        if (!domain) return
+        const existing = competitors.find(c => c.domain === domain)
+        if (!existing) {
+          competitors.push({
+            domain,
+            commonKeywords: parseInt(row.Np || row.common || row.Cr || '0', 10) || 0,
+            traffic: parseInt(row.Ot || row.Or || row.traffic || '0', 10) || 0,
+            trafficValue: 0,
+            topCountry: row.topCountry || 'US',
+            relevance: parseInt(row.Cr || row.competition || '0', 10) || 0,
+            source: 'SEMrush',
+          })
+        }
       }
     })
   }
@@ -64,7 +96,12 @@ function normalizeCompetitors(data: any): Competitor[] {
   // Exa similar sites
   if (data?.sources?.exa && Array.isArray(data.sources.exa)) {
     data.sources.exa.forEach((item: any) => {
-      const domain = item.url ? new URL(item.url).hostname : ''
+      let domain = ''
+      try {
+        domain = item.url ? new URL(item.url).hostname : (item.domain || '')
+      } catch {
+        domain = item.domain || ''
+      }
       const existing = competitors.find(c => c.domain === domain)
       if (!existing && domain) {
         competitors.push({
@@ -85,15 +122,20 @@ function normalizeCompetitors(data: any): Competitor[] {
 
 export default function CompetitorsPage() {
   const { domain } = useSEO()
+  const { activeProject } = useProject()
+  const projectMarket = activeProject?.market || null
   const { data, isLoading, error, refetch } = useQuery({
-    queryKey: ['competitors', domain],
-    queryFn: () => fetchCompetitors(domain),
+    queryKey: ['competitors', domain, projectMarket],
+    queryFn: () => fetchCompetitors(domain, projectMarket),
     staleTime: 10 * 60 * 1000,
     retry: 1,
   })
 
   const competitors = useMemo(() => normalizeCompetitors(data), [data])
   const activeSources = data?.activeSources || []
+  const gaps = Array.isArray(data?.gaps) ? data.gaps : []
+  const softDegraded = Array.isArray(data?.softDegraded) ? data.softDegraded : []
+  const marketLabel = data?.market?.label || data?.market || null
 
   const [search, setSearch] = useState('')
   const [sortKey, setSortKey] = useState<'traffic' | 'commonKeywords' | 'relevance'>('traffic')
@@ -141,12 +183,37 @@ export default function CompetitorsPage() {
       </div>
 
       {/* Source badges */}
-      {activeSources.length > 0 && (
-        <div className="flex gap-1.5 flex-wrap">
+      {(activeSources.length > 0 || softDegraded.length > 0 || marketLabel) && (
+        <div className="flex gap-1.5 flex-wrap items-center">
+          {marketLabel && (
+            <span className="text-[10px] md:text-xs bg-blue-500/15 text-blue-300 border border-blue-500/30 px-2 py-0.5 rounded touch-target-reset">Market: {String(marketLabel)}</span>
+          )}
           {activeSources.map((src: string) => (
             <span key={src} className="text-[10px] md:text-xs bg-accent/10 text-accent-light border border-accent/20 px-2 py-0.5 rounded touch-target-reset">{src}</span>
           ))}
+          {softDegraded.map((src: string) => (
+            <span key={`soft-${src}`} className="text-[10px] md:text-xs bg-amber-500/15 text-amber-300 border border-amber-500/30 px-2 py-0.5 rounded touch-target-reset">{src} soft-degraded</span>
+          ))}
         </div>
+      )}
+
+      {gaps.length > 0 && (
+        <DataCard title="Competitor gap estimates" dataState={dataState as any} fetchedAt={data?.fetchedAt}>
+          <div className="space-y-2">
+            {gaps.slice(0, 8).map((g: any) => (
+              <div key={g.competitor} className="flex items-center justify-between gap-3 rounded-xl border border-border bg-bg-darkest px-3 py-2.5">
+                <div className="min-w-0">
+                  <p className="truncate text-sm font-medium text-fg">{g.competitor}</p>
+                  <p className="text-[11px] text-fg-dim mt-0.5 line-clamp-2">{g.note}</p>
+                </div>
+                <div className="text-right shrink-0">
+                  <p className="text-[10px] uppercase tracking-wider text-fg-dim">Missing est.</p>
+                  <p className="text-sm font-semibold text-fg">{g.ourMissingEstimate ?? '—'}</p>
+                </div>
+              </div>
+            ))}
+          </div>
+        </DataCard>
       )}
 
       {/* Filters */}

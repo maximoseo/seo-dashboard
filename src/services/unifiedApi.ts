@@ -13,7 +13,7 @@ export interface UnifiedOverview {
   timestamp: string
 }
 
-export async function fetchUnifiedOverview(domain: string): Promise<UnifiedOverview> {
+export async function fetchUnifiedOverview(domain: string, market?: string | null): Promise<UnifiedOverview> {
   const date = getToday()
   const sources: string[] = []
   const result: UnifiedOverview = {
@@ -28,7 +28,7 @@ export async function fetchUnifiedOverview(domain: string): Promise<UnifiedOverv
   const [ahrefsDR, ahrefsMetrics, semOverview, psiDesktop, dfsSummary] = await Promise.allSettled([
     fetchDomainRating(domain, date),
     fetchSiteMetrics(domain, date),
-    fetchSemrushOverview(domain),
+    fetchSemrushOverview(domain, market),
     fetchPageSpeed(`https://${domain}`, 'desktop'),
     fetchDomainSummary(domain),
   ])

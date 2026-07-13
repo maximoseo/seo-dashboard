@@ -13,11 +13,14 @@ async function fetchAPI(endpoint: string, params?: Record<string, string>) {
   return res.json()
 }
 
-export function useOverview(domain: string | null) {
+export function useOverview(domain: string | null, market?: string | null) {
+  const marketParam = market?.trim() || ''
   return useQuery({
-    queryKey: ['overview', domain],
+    queryKey: ['overview', domain, marketParam],
     queryFn: async () => {
-      const data = await fetchAPI('overview', { domain: domain! })
+      const params: Record<string, string> = { domain: domain! }
+      if (marketParam) params.market = marketParam
+      const data = await fetchAPI('overview', params)
       const semrush = normalizeSemrush(data?.sources?.semrush)
       const ahrefs = normalizeAhrefs(data?.sources?.ahrefs)
       const dfs = data?.sources?.dataforseo
@@ -28,10 +31,15 @@ export function useOverview(domain: string | null) {
   })
 }
 
-export function useKeywords(domain: string | null) {
+export function useKeywords(domain: string | null, market?: string | null) {
+  const marketParam = market?.trim() || ''
   return useQuery({
-    queryKey: ['keywords', domain],
-    queryFn: async () => fetchAPI('keywords/aggregated', { domain: domain!, limit: '50' }),
+    queryKey: ['keywords', domain, marketParam],
+    queryFn: async () => {
+      const params: Record<string, string> = { domain: domain!, limit: '50' }
+      if (marketParam) params.market = marketParam
+      return fetchAPI('keywords/aggregated', params)
+    },
     enabled: !!domain,
     staleTime: 10 * 60 * 1000,
   })

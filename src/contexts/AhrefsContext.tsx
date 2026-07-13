@@ -14,6 +14,7 @@ import {
 } from '@/services/ahrefsApi'
 import { fetchDomainOverview, type SemrushDomainOverview } from '@/services/semrushApi'
 import { fetchPageSpeed, type PageSpeedResult } from '@/services/pagespeedApi'
+import { useProject } from '@/contexts/ProjectContext'
 
 interface AhrefsData {
   loading: boolean
@@ -54,7 +55,9 @@ export function useAhrefs() {
 }
 
 export function AhrefsProvider({ children }: { children: ReactNode }) {
-  const [target, setTarget] = useState('maximo-seo.ai')
+  const { activeDomain, activeProject } = useProject()
+  const target = activeDomain || 'maximo-seo.ai'
+  const market = activeProject?.market || null
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [domainRating, setDomainRating] = useState<DomainRating | null>(null)
@@ -67,7 +70,55 @@ export function AhrefsProvider({ children }: { children: ReactNode }) {
   const [pagespeedMobile, setPagespeedMobile] = useState<PageSpeedResult | null>(null)
   const [activeSources, setActiveSources] = useState<string[]>([])
 
-  const loadData = async () => {
+  useEffect(() => {
+    let cancelled = false
+
+    const loadData = async () => {
+      setLoading(true)
+      setError(null)
+      const date = getToday()
+      const sources: string[] = []
+
+      try {
+        const results = await Promise.allSettled([
+          fetchDomainRating(target, date),
+          fetchSiteMetrics(target, date),
+          fetchBacklinksStats(target),
+          fetchOrganicKeywords(target, date, 50),
+          fetchRefDomains(target, 20),
+          fetchDomainOverview(target, market),
+          fetchPageSpeed(`https://${target}`, 'desktop'),
+          fetchPageSpeed(`https://${target}`, 'mobile'),
+        ])
+
+        if (cancelled) return
+
+        const [dr, metrics, blStats, keywords, domains, semOv, psiD, psiM] = results
+
+        if (dr.status === 'fulfilled') { setDomainRating(dr.value); sources.push('Ahrefs') }
+        if (metrics.status === 'fulfilled') setSiteMetrics(metrics.value)
+        if (blStats.status === 'fulfilled') setBacklinksStats(blStats.value)
+        if (keywords.status === 'fulfilled') setOrganicKeywords(keywords.value)
+        if (domains.status === 'fulfilled') setRefDomains(domains.value)
+        if (semOv.status === 'fulfilled' && semOv.value) { setSemrushOverview(semOv.value); sources.push('SEMrush') }
+        if (psiD.status === 'fulfilled' && psiD.value) { setPagespeedDesktop(psiD.value); sources.push('PageSpeed') }
+        if (psiM.status === 'fulfilled') setPagespeedMobile(psiM.value)
+
+        setActiveSources([...new Set(sources)])
+      } catch (e) {
+        if (!cancelled) setError(e instanceof Error ? e.message : 'Failed to load data')
+      } finally {
+        if (!cancelled) setLoading(false)
+      }
+    }
+
+    void loadData()
+    return () => {
+      cancelled = true
+    }
+  }, [target, market])
+
+  const refresh = async () => {
     setLoading(true)
     setError(null)
     const date = getToday()
@@ -80,7 +131,7 @@ export function AhrefsProvider({ children }: { children: ReactNode }) {
         fetchBacklinksStats(target),
         fetchOrganicKeywords(target, date, 50),
         fetchRefDomains(target, 20),
-        fetchDomainOverview(target),
+        fetchDomainOverview(target, market),
         fetchPageSpeed(`https://${target}`, 'desktop'),
         fetchPageSpeed(`https://${target}`, 'mobile'),
       ])
@@ -104,17 +155,13 @@ export function AhrefsProvider({ children }: { children: ReactNode }) {
     }
   }
 
-  useEffect(() => {
-    loadData()
-  }, [target])
-
   return (
     <AhrefsContext.Provider
       value={{
         loading, error,
         domainRating, siteMetrics, backlinksStats, organicKeywords, refDomains,
         semrushOverview, pagespeedDesktop, pagespeedMobile,
-        activeSources, target, setTarget, refresh: loadData,
+        activeSources, target, setTarget: () => {}, refresh,
       }}
     >
       {children}

@@ -16,23 +16,8 @@ interface PageData {
   loadTime: number
 }
 
-const demoPages: PageData[] = [
-  { url: '/', title: 'SEO Pro - Best SEO Tools & Software', status: 200, traffic: 12500, keywords: 245, backlinks: 890, score: 94, contentType: 'page', lastCrawled: '2024-10-30', wordCount: 2400, loadTime: 1.2 },
-  { url: '/blog/seo-best-practices', title: 'SEO Best Practices for 2024 - Complete Guide', status: 200, traffic: 6200, keywords: 189, backlinks: 340, score: 91, contentType: 'blog', lastCrawled: '2024-10-30', wordCount: 4500, loadTime: 1.8 },
-  { url: '/tools/keyword-research', title: 'Free Keyword Research Tool', status: 200, traffic: 4800, keywords: 156, backlinks: 210, score: 88, contentType: 'page', lastCrawled: '2024-10-30', wordCount: 1800, loadTime: 2.1 },
-  { url: '/blog/on-page-seo', title: 'On-Page SEO: The Definitive Guide', status: 200, traffic: 3900, keywords: 134, backlinks: 180, score: 85, contentType: 'blog', lastCrawled: '2024-10-29', wordCount: 5200, loadTime: 1.5 },
-  { url: '/pricing', title: 'Pricing Plans - SEO Pro', status: 200, traffic: 3100, keywords: 45, backlinks: 120, score: 82, contentType: 'page', lastCrawled: '2024-10-30', wordCount: 900, loadTime: 0.9 },
-  { url: '/blog/technical-seo', title: 'Technical SEO Checklist', status: 200, traffic: 2800, keywords: 98, backlinks: 95, score: 79, contentType: 'blog', lastCrawled: '2024-10-29', wordCount: 3800, loadTime: 1.6 },
-  { url: '/tools/seo-audit', title: 'Free SEO Audit Tool', status: 200, traffic: 2400, keywords: 87, backlinks: 150, score: 90, contentType: 'page', lastCrawled: '2024-10-30', wordCount: 1500, loadTime: 2.3 },
-  { url: '/blog/link-building', title: 'Link Building Strategies That Work', status: 200, traffic: 1900, keywords: 76, backlinks: 230, score: 86, contentType: 'blog', lastCrawled: '2024-10-28', wordCount: 4100, loadTime: 1.4 },
-  { url: '/old-pricing', title: 'Old Pricing Page', status: 301, traffic: 0, keywords: 0, backlinks: 45, score: 0, contentType: 'page', lastCrawled: '2024-10-30', wordCount: 0, loadTime: 0.3 },
-  { url: '/blog/seo-guide-2023', title: 'SEO Guide 2023', status: 301, traffic: 0, keywords: 0, backlinks: 67, score: 0, contentType: 'blog', lastCrawled: '2024-10-29', wordCount: 0, loadTime: 0.2 },
-  { url: '/tools/broken-checker', title: 'Broken Link Checker', status: 200, traffic: 1200, keywords: 42, backlinks: 55, score: 72, contentType: 'page', lastCrawled: '2024-10-30', wordCount: 1100, loadTime: 1.9 },
-  { url: '/api/v1/docs', title: 'API Documentation', status: 200, traffic: 800, keywords: 23, backlinks: 30, score: 68, contentType: 'page', lastCrawled: '2024-10-28', wordCount: 6200, loadTime: 1.1 },
-  { url: '/blog/local-seo-tips', title: 'Local SEO Tips for Small Business', status: 200, traffic: 1500, keywords: 65, backlinks: 42, score: 75, contentType: 'blog', lastCrawled: '2024-10-29', wordCount: 3200, loadTime: 1.7 },
-  { url: '/old-feature', title: 'Deprecated Feature Page', status: 404, traffic: 0, keywords: 0, backlinks: 12, score: 0, contentType: 'page', lastCrawled: '2024-10-30', wordCount: 0, loadTime: 0.1 },
-  { url: '/tools/rank-tracker', title: 'Rank Tracker Tool', status: 200, traffic: 2100, keywords: 78, backlinks: 88, score: 83, contentType: 'page', lastCrawled: '2024-10-30', wordCount: 1600, loadTime: 2.0 },
-]
+// No production demo crawl inventory — empty until real crawl/sitemap module is wired.
+const livePages: PageData[] = []
 
 const ITEMS_PER_PAGE = 10
 
@@ -57,7 +42,7 @@ export default function PagesPage() {
   const [expandedUrl, setExpandedUrl] = useState<string | null>(null)
 
   const filtered = useMemo(() => {
-    let data = [...demoPages]
+    let data = [...livePages]
     if (search) data = data.filter(p => p.url.toLowerCase().includes(search.toLowerCase()) || p.title.toLowerCase().includes(search.toLowerCase()))
     if (statusFilter !== 'all') {
       if (statusFilter === '2xx') data = data.filter(p => p.status >= 200 && p.status < 300)
@@ -68,14 +53,14 @@ export default function PagesPage() {
     return data
   }, [search, statusFilter, typeFilter])
 
-  const totalPages = Math.ceil(filtered.length / ITEMS_PER_PAGE)
+  const totalPages = Math.max(1, Math.ceil(filtered.length / ITEMS_PER_PAGE))
   const paginated = filtered.slice((page - 1) * ITEMS_PER_PAGE, page * ITEMS_PER_PAGE)
 
   const summaryCards = [
-    { label: 'Total Pages', value: demoPages.length.toString(), color: 'text-fg' },
-    { label: 'Healthy (2xx)', value: demoPages.filter(p => p.status >= 200 && p.status < 300).length.toString(), color: 'text-green' },
-    { label: 'Redirects (3xx)', value: demoPages.filter(p => p.status >= 300 && p.status < 400).length.toString(), color: 'text-yellow' },
-    { label: 'Errors (4xx/5xx)', value: demoPages.filter(p => p.status >= 400).length.toString(), color: 'text-red' },
+    { label: 'Total Pages', value: livePages.length.toString(), color: 'text-fg' },
+    { label: 'Healthy (2xx)', value: livePages.filter(p => p.status >= 200 && p.status < 300).length.toString(), color: 'text-green' },
+    { label: 'Redirects (3xx)', value: livePages.filter(p => p.status >= 300 && p.status < 400).length.toString(), color: 'text-yellow' },
+    { label: 'Errors (4xx/5xx)', value: livePages.filter(p => p.status >= 400).length.toString(), color: 'text-red' },
   ]
 
   return (
@@ -87,7 +72,7 @@ export default function PagesPage() {
           <p className="text-xs md:text-sm text-fg-muted mt-0.5">Crawled pages with on-page audit data</p>
         </div>
         <div className="flex gap-1.5 flex-wrap">
-          <DataStateBadge state="demo" source="crawl placeholder" />
+          <DataStateBadge state={livePages.length ? 'live' : 'planned'} source={livePages.length ? 'crawl' : 'no crawl inventory yet'} />
           <span className="text-[11px] md:text-xs bg-purple-500/20 text-purple-300 border border-purple-500/30 px-2 py-1 rounded touch-target-reset">DataForSEO</span>
           <span className="text-[11px] md:text-xs bg-teal-500/20 text-teal-300 border border-teal-500/30 px-2 py-1 rounded touch-target-reset">Browserless</span>
         </div>
@@ -154,6 +139,11 @@ export default function PagesPage() {
 
       {/* Mobile Card View */}
       <div className="md:hidden space-y-2.5">
+        {!paginated.length && (
+          <div className="rounded-xl border border-border bg-bg-card p-5 text-center text-sm text-fg-muted">
+            No crawl inventory yet — page list stays empty until sitemap/crawl module is connected.
+          </div>
+        )}
         {paginated.map((p) => {
           const sc = getStatusColor(p.status)
           const isExpanded = expandedUrl === p.url
@@ -244,6 +234,13 @@ export default function PagesPage() {
               </tr>
             </thead>
             <tbody>
+              {!paginated.length && (
+                <tr>
+                  <td colSpan={6} className="px-5 py-10 text-center text-sm text-fg-muted">
+                    No crawl inventory yet — page list stays empty until sitemap/crawl module is connected.
+                  </td>
+                </tr>
+              )}
               {paginated.map((p) => {
                 const sc = getStatusColor(p.status)
                 const isExpanded = expandedUrl === p.url

@@ -51,13 +51,16 @@ export interface SemrushCompetitor {
   adwords_keywords: number
 }
 
-export async function fetchDomainOverview(domain: string): Promise<SemrushDomainOverview | null> {
-  const cacheKey = `overview_${domain}`
+export async function fetchDomainOverview(domain: string, market?: string | null): Promise<SemrushDomainOverview | null> {
+  const marketKey = market?.trim() || ''
+  const cacheKey = `overview_${domain}_${marketKey}`
   const cached = getCached<SemrushDomainOverview>(cacheKey)
   if (cached) return cached
 
   try {
-    const res = await authFetch(`/api/semrush/domain-overview?domain=${encodeURIComponent(domain)}`)
+    const params = new URLSearchParams({ domain })
+    if (marketKey) params.set('market', marketKey)
+    const res = await authFetch(`/api/semrush/domain-overview?${params.toString()}`)
     if (!res.ok) throw new Error(`SEMrush error: ${res.status}`)
     const data = await res.json()
     if (!data) return null
@@ -78,13 +81,16 @@ export async function fetchDomainOverview(domain: string): Promise<SemrushDomain
   }
 }
 
-export async function fetchCompetitors(domain: string): Promise<SemrushCompetitor[]> {
-  const cacheKey = `competitors_${domain}`
+export async function fetchCompetitors(domain: string, market?: string | null): Promise<SemrushCompetitor[]> {
+  const marketKey = market?.trim() || ''
+  const cacheKey = `competitors_${domain}_${marketKey}`
   const cached = getCached<SemrushCompetitor[]>(cacheKey)
   if (cached) return cached
 
   try {
-    const res = await authFetch(`/api/semrush/competitors?domain=${encodeURIComponent(domain)}`)
+    const params = new URLSearchParams({ domain })
+    if (marketKey) params.set('market', marketKey)
+    const res = await authFetch(`/api/semrush/competitors?${params.toString()}`)
     if (!res.ok) throw new Error(`SEMrush error: ${res.status}`)
     const data = await res.json()
     if (!Array.isArray(data)) return []
@@ -103,13 +109,16 @@ export async function fetchCompetitors(domain: string): Promise<SemrushCompetito
   }
 }
 
-export async function fetchKeywordOverview(keyword: string): Promise<any> {
-  const cacheKey = `kw_${keyword}`
+export async function fetchKeywordOverview(keyword: string, market?: string | null): Promise<any> {
+  const marketKey = market?.trim() || ''
+  const cacheKey = `kw_${keyword}_${marketKey}`
   const cached = getCached<any>(cacheKey)
   if (cached) return cached
 
   try {
-    const res = await authFetch(`/api/semrush/keyword-overview?keyword=${encodeURIComponent(keyword)}`)
+    const params = new URLSearchParams({ keyword })
+    if (marketKey) params.set('market', marketKey)
+    const res = await authFetch(`/api/semrush/keyword-overview?${params.toString()}`)
     if (!res.ok) throw new Error(`SEMrush error: ${res.status}`)
     const data = await res.json()
     setCache(cacheKey, data, CACHE_TTL_LONG)
