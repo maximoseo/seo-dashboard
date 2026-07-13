@@ -21,6 +21,8 @@
     "e2e": "playwright test",
     "preview": "vite preview",
     "start": "node dist-server/index.js",
+    "snapshot": "node scripts/snapshot-job.js",
+    "snapshot:smoke": "node scripts/snapshot-job.js --domain=nyg.co.il --domain=galoz.co.il --domain=amir-peleg.com",
     "verify": "npm run typecheck && npm run test && npm run lint && npm run build"
   },
   "dependencies": {

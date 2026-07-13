@@ -72,8 +72,14 @@ const SUPABASE_URL = process.env.SUPABASE_URL || 'https://sunrupuwvpalipiuebcv.s
 const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InN1bnJ1cHV3dnBhbGlwaXVlYmN2Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzgwNjQyODcsImV4cCI6MjA5MzY0MDI4N30.TBRorIxlCqQHsdEor3vKqAg1_8OeGrvot8lTLt6y2rg'
 const AUTH_DISABLED = process.env.AUTH_DISABLED === 'true' // for local dev only
 const DASHBOARD_AUTH_USERNAME = process.env.DASHBOARD_AUTH_USERNAME || process.env.DASHBOARD_USERNAME || process.env.DASHBOARD_EMAIL || 'service@maximo-seo.com'
-const DASHBOARD_AUTH_PASSWORD = process.env.DASHBOARD_AUTH_PASSWORD || process.env.DASHBOARD_PASSWORD || 'Supermario60@!'
-const DASHBOARD_AUTH_SECRET = process.env.DASHBOARD_AUTH_SECRET || process.env.DASHBOARD_API_KEY || 'maximo-seo-dashboard-secret-2026-xK9mP2'
+// Never ship plaintext password defaults — production must set DASHBOARD_AUTH_PASSWORD via env.
+const DASHBOARD_AUTH_PASSWORD = process.env.DASHBOARD_AUTH_PASSWORD || process.env.DASHBOARD_PASSWORD || ''
+const DASHBOARD_AUTH_SECRET =
+  process.env.DASHBOARD_AUTH_SECRET ||
+  process.env.DASHBOARD_API_KEY ||
+  (process.env.NODE_ENV === 'production' || process.env.VERCEL === '1'
+    ? ''
+    : 'dev-only-local-secret-change-me')
 const DEFAULT_DASHBOARD_TOKEN_TTL_SECONDS = 60 * 60 * 12
 const parsedDashboardTokenTtl = Number(process.env.DASHBOARD_TOKEN_TTL_SECONDS || DEFAULT_DASHBOARD_TOKEN_TTL_SECONDS)
 const DASHBOARD_TOKEN_TTL_SECONDS = Number.isFinite(parsedDashboardTokenTtl) && parsedDashboardTokenTtl > 0
@@ -269,9 +275,8 @@ app.post('/api/auth/login', loginLimiter, validateBody(loginSchema), (req, res) 
 
   const { username, password } = (req as any).validatedBody as z.infer<typeof loginSchema>
   const usernameOk = safeCompare(username.toLowerCase(), DASHBOARD_AUTH_USERNAME.toLowerCase())
-  const passwordOk = safeCompare(password, DASHBOARD_AUTH_PASSWORD)
+  const passwordOk = Boolean(DASHBOARD_AUTH_PASSWORD) && safeCompare(password, DASHBOARD_AUTH_PASSWORD)
 
-    // DEBUG: log incoming credentials
   if (!usernameOk || !passwordOk) {
     return res.status(401).json({ error: 'Invalid username or password.' })
   }
@@ -392,7 +397,9 @@ function providerUnavailable(provider: string, error: unknown) {
 // ═══════════════════════════════════════════════════════════════════════════════
 
 app.get('/api/ahrefs/domain-rating', expensiveLimiter, budgetMiddleware('ahrefs'), async (req, res) => {
-  const { target, date } = req.query as Record<string, string>
+  const { target } = req.query as Record<string, string>
+  // Ahrefs Site Explorer domain-rating requires `date`; default to today if omitted.
+  const date = (req.query as Record<string, string>).date || new Date().toISOString().slice(0, 10)
   try {
     const data = await withCache(realtimeCache, `ahrefs_dr_${target}_${date}`, async () => {
       const r = await axios.get('https://api.ahrefs.com/v3/site-explorer/domain-rating', {
@@ -405,7 +412,8 @@ app.get('/api/ahrefs/domain-rating', expensiveLimiter, budgetMiddleware('ahrefs'
 })
 
 app.get('/api/ahrefs/metrics', expensiveLimiter, budgetMiddleware('ahrefs'), async (req, res) => {
-  const { target, date, mode } = req.query as Record<string, string>
+  const { target, mode } = req.query as Record<string, string>
+  const date = (req.query as Record<string, string>).date || new Date().toISOString().slice(0, 10)
   try {
     const data = await withCache(realtimeCache, `ahrefs_metrics_${target}_${date}`, async () => {
       const r = await axios.get('https://api.ahrefs.com/v3/site-explorer/metrics', {
@@ -418,7 +426,8 @@ app.get('/api/ahrefs/metrics', expensiveLimiter, budgetMiddleware('ahrefs'), asy
 })
 
 app.get('/api/ahrefs/organic-keywords', expensiveLimiter, budgetMiddleware('ahrefs'), async (req, res) => {
-  const { target, date, mode, limit, select, order_by } = req.query as Record<string, string>
+  const { target, mode, limit, select, order_by } = req.query as Record<string, string>
+  const date = (req.query as Record<string, string>).date || new Date().toISOString().slice(0, 10)
   try {
     const data = await withCache(realtimeCache, `ahrefs_kw_${target}_${date}_${limit}`, async () => {
       const r = await axios.get('https://api.ahrefs.com/v3/site-explorer/organic-keywords', {
