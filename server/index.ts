@@ -1600,7 +1600,7 @@ app.get('/api/pages/aggregated', expensiveLimiter, async (req, res) => {
 
   const normalizeUrl = (raw: string) => {
     if (!raw) return ''
-    let u = String(raw).trim()
+    const u = String(raw).trim()
     if (!u) return ''
     try {
       if (u.startsWith('http')) {
