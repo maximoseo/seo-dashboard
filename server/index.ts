@@ -68,8 +68,8 @@ app.use('/api', generalLimiter)
 // ═══════════════════════════════════════════════════════════════════════════════
 // SECURITY: Auth middleware — Supabase JWT verification
 // ═══════════════════════════════════════════════════════════════════════════════
-const SUPABASE_URL = process.env.SUPABASE_URL || 'https://sunrupuwvpalipiuebcv.supabase.co'
-const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InN1bnJ1cHV3dnBhbGlwaXVlYmN2Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzgwNjQyODcsImV4cCI6MjA5MzY0MDI4N30.TBRorIxlCqQHsdEor3vKqAg1_8OeGrvot8lTLt6y2rg'
+const SUPABASE_URL = process.env.SUPABASE_URL || ''
+const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY || ''
 const AUTH_DISABLED = process.env.AUTH_DISABLED === 'true' // for local dev only
 const DASHBOARD_AUTH_USERNAME = process.env.DASHBOARD_AUTH_USERNAME || process.env.DASHBOARD_USERNAME || process.env.DASHBOARD_EMAIL || 'service@maximo-seo.com'
 // Never ship plaintext password defaults — production must set DASHBOARD_AUTH_PASSWORD via env.
