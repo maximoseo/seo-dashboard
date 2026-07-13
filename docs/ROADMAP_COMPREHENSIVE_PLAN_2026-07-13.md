@@ -215,15 +215,17 @@ Small, safe diffs with high operator value:
 2. ✅ **Force-refresh + lastFetched** on Keywords (badge + button); Competitors already had Refresh
 3. ✅ **Honest empty states** on Pages (no production demo crawl inventory)
 4. ✅ **SE Ranking soft-degrade banner** when provider returns 403/quota (Keywords + Competitors badges)
-5. ⏳ **Reports validation UX** — schema-aligned body (sections) or UI error humanized
-6. ⏳ **Command Center “close/snooze task”** loops to shrink open tasks
-7. ⏳ Nightly cron: `/api/sync` limited batch + digest to tomer@webs.co.il
+5. ✅ **Reports validation UX** — humanized Zod errors + tip banner in Report Builder
+6. ✅ **Command Center close/snooze task** loop + Tasks page actions (`PATCH /api/tasks/:id`)
+7. ✅ Nightly cron: `GET/POST /api/cron/nightly-sync` (Vercel 02:00 UTC) + digest email to `tomer@webs.co.il`
 
 Also shipped with this pass:
 
-- ✅ Production dashboard auth secrets re-applied (login + `/api/projects` verified live)
+- ✅ Production + **Preview** dashboard auth secrets applied
+- ✅ GitHub secrets `E2E_USERNAME` / `E2E_PASSWORD`
 - ✅ Playwright smoke suite (`e2e/smoke.spec.ts`) + CI job on main (`e2e-smoke`)
 - ✅ Missing Vercel entrypoint `api/portfolio.ts`
+- ✅ `vercel.json` crons + `api/cron/*` entrypoints
 
 ---
 

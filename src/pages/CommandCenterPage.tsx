@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom'
 import DataStateBadge from '@/components/DataStateBadge'
 import { DataCard } from '@/components/DataCard'
 import { authFetch } from '@/lib/authToken'
+import { readApiError } from '@/lib/apiErrors'
 import { buildProjectPath } from '@/lib/projectRoutes'
 
 type MovementRow = {
@@ -69,20 +70,45 @@ function formatPos(row: MovementRow) {
   return '—'
 }
 
+type PortfolioTask = {
+  id: string
+  title: string
+  status: string
+  priority: string
+  domain: string | null
+  domainName?: string | null
+  brief?: string
+}
+
 export default function CommandCenterPage() {
   const [data, setData] = useState<CommandCenterResponse | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
   const [syncing, setSyncing] = useState(false)
   const [syncMsg, setSyncMsg] = useState<string | null>(null)
+  const [openTasks, setOpenTasks] = useState<PortfolioTask[]>([])
+  const [taskBusy, setTaskBusy] = useState<string | null>(null)
+  const [taskMsg, setTaskMsg] = useState<string | null>(null)
+
+  const loadTasks = async () => {
+    try {
+      const res = await authFetch('/api/tasks/open-portfolio?limit=12')
+      if (!res.ok) return
+      const body = await res.json()
+      setOpenTasks(body.tasks || [])
+    } catch {
+      // non-blocking
+    }
+  }
 
   const load = async () => {
     setLoading(true)
     setError(null)
     try {
       const res = await authFetch('/api/command-center')
-      if (!res.ok) throw new Error(`Command center failed (${res.status})`)
+      if (!res.ok) throw new Error(await readApiError(res, 'Command center failed'))
       setData(await res.json())
+      await loadTasks()
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load command center')
       setData(null)
@@ -104,14 +130,33 @@ export default function CommandCenterPage() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ limit: 15, createTasks: true, push }),
       })
-      const body = await res.json().catch(() => ({}))
-      if (!res.ok) throw new Error(body.error || `Sync failed (${res.status})`)
+      if (!res.ok) throw new Error(await readApiError(res, 'Sync failed'))
+      const body = await res.json()
       setSyncMsg(`Synced ${body.synced || 0} domains · alerts upserted across portfolio`)
       await load()
     } catch (err) {
       setSyncMsg(err instanceof Error ? err.message : 'Sync failed')
     } finally {
       setSyncing(false)
+    }
+  }
+
+  const actOnTask = async (id: string, action: 'close' | 'snooze' | 'reopen') => {
+    setTaskBusy(id)
+    setTaskMsg(null)
+    try {
+      const res = await authFetch(`/api/tasks/${encodeURIComponent(id)}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(action === 'snooze' ? { action, snoozeHours: 24 } : { action }),
+      })
+      if (!res.ok) throw new Error(await readApiError(res, 'Task update failed'))
+      setTaskMsg(action === 'close' ? 'Task closed' : action === 'snooze' ? 'Task snoozed 24h' : 'Task reopened')
+      await load()
+    } catch (err) {
+      setTaskMsg(err instanceof Error ? err.message : 'Task update failed')
+    } finally {
+      setTaskBusy(null)
     }
   }
 
@@ -346,6 +391,50 @@ export default function CommandCenterPage() {
           </div>
         </DataCard>
       )}
+
+      <DataCard title="Open task actions" dataState={state as any} fetchedAt={data?.fetchedAt}>
+        {taskMsg && <p className="mb-3 text-xs text-fg-muted">{taskMsg}</p>}
+        <div className="space-y-2">
+          {openTasks.map((task) => (
+            <div
+              key={task.id}
+              className="flex flex-col gap-2 rounded-xl border border-border bg-bg-darkest px-3 py-2.5 sm:flex-row sm:items-center sm:justify-between"
+            >
+              <div className="min-w-0">
+                <p className="truncate text-sm font-medium text-fg">{task.title}</p>
+                <p className="truncate text-xs text-fg-dim">
+                  {task.domain || '—'} · {task.priority} · {task.status}
+                </p>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <button
+                  disabled={taskBusy === task.id}
+                  onClick={() => void actOnTask(task.id, 'close')}
+                  className="rounded-lg border border-green/30 bg-green/10 px-2.5 py-1 text-[11px] text-green disabled:opacity-50"
+                >
+                  Close
+                </button>
+                <button
+                  disabled={taskBusy === task.id}
+                  onClick={() => void actOnTask(task.id, 'snooze')}
+                  className="rounded-lg border border-amber-400/30 bg-amber-400/10 px-2.5 py-1 text-[11px] text-amber-100 disabled:opacity-50"
+                >
+                  Snooze 24h
+                </button>
+                <Link
+                  to={task.domain ? buildProjectPath(task.domain, 'tasks') : '/tasks'}
+                  className="rounded-lg border border-border px-2.5 py-1 text-[11px] text-fg-muted hover:border-border-light"
+                >
+                  Open
+                </Link>
+              </div>
+            </div>
+          ))}
+          {!loading && openTasks.length === 0 && (
+            <p className="text-sm text-fg-muted">No open portfolio tasks. Sync spine to materialize alerts → tasks.</p>
+          )}
+        </div>
+      </DataCard>
 
       <DataCard title="Spine readiness" dataState={state as any}>
         <div className="grid grid-cols-1 gap-3 md:grid-cols-3 text-sm">

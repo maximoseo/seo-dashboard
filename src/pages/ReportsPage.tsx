@@ -4,6 +4,7 @@ import DataStateBadge from '@/components/DataStateBadge'
 import { useSEO } from '@/contexts/SEOContext'
 import { useProject } from '@/contexts/ProjectContext'
 import { authFetch } from '@/lib/authToken'
+import { readApiError } from '@/lib/apiErrors'
 
 type Locale = 'he' | 'en'
 type TemplateId = 'weekly' | 'monthly' | 'executive' | 'local-geo'
@@ -79,7 +80,12 @@ export default function ReportsPage() {
           format,
         }),
       })
-      if (!res.ok) throw new Error(`Report preview failed: ${res.status}`)
+      if (!res.ok) {
+        if (format === 'json' || res.headers.get('content-type')?.includes('application/json')) {
+          throw new Error(await readApiError(res, 'Report preview failed'))
+        }
+        throw new Error(`Report preview failed (${res.status})`)
+      }
       if (format === 'html') {
         const text = await res.text()
         setHtml(text)
@@ -118,8 +124,8 @@ export default function ReportsPage() {
           clientName: activeProject?.name || null,
         }),
       })
-      const body = await res.json().catch(() => ({}))
-      if (!res.ok) throw new Error(body.error || `Share failed: ${res.status}`)
+      if (!res.ok) throw new Error(await readApiError(res, 'Share failed'))
+      const body = await res.json()
       setShareUrl(body.htmlUrl || body.path || null)
       if (body.markdownUrl) setMarkdown((prev) => prev || '')
     } catch (e) {
@@ -265,7 +271,15 @@ export default function ReportsPage() {
           </div>
         )}
 
-        {error && <p className="mt-3 text-xs text-yellow">{error}</p>}
+        {error && (
+          <div className="mt-3 rounded-xl border border-amber-500/30 bg-amber-500/10 p-3 text-xs text-amber-100">
+            <p className="font-medium">Couldn’t generate this report</p>
+            <p className="mt-1 text-amber-50/90">{error}</p>
+            <p className="mt-2 text-[11px] text-amber-100/70">
+              Tip: domain should be like <code className="font-mono">example.com</code> (no https://). Locale he/en · template weekly/monthly/executive/local-geo.
+            </p>
+          </div>
+        )}
         {shareUrl && (
           <p className="mt-3 rounded-xl border border-blue-500/20 bg-blue-500/10 p-3 text-xs text-blue-100">
             Share (7d):{' '}

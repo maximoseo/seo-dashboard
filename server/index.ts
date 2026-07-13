@@ -236,6 +236,19 @@ app.use('/api', async (req, res, next) => {
     return next()
   }
 
+  // Vercel Cron + manual operators: Bearer CRON_SECRET for dedicated cron routes only.
+  const CRON_SECRET = process.env.CRON_SECRET || ''
+  const bearer = req.get('authorization')?.replace(/^Bearer\s+/i, '') || ''
+  if (
+    CRON_SECRET &&
+    bearer &&
+    safeCompare(bearer, CRON_SECRET) &&
+    (req.path === '/cron/nightly-sync' || req.path === '/cron/health')
+  ) {
+    ;(req as any).user = { id: 'cron', email: 'cron@local', app_metadata: { provider: 'cron' } }
+    return next()
+  }
+
   // Allow bypass in explicit local dev mode only.
   if (AUTH_DISABLED) {
     ;(req as any).user = { id: 'dev', email: 'dev@local', app_metadata: { provider: 'dev' } }
@@ -289,10 +302,36 @@ function validateQuery(schema: z.ZodSchema) {
   return (req: express.Request, res: express.Response, next: express.NextFunction) => {
     const parsed = schema.safeParse(req.query)
     if (!parsed.success) {
-      return res.status(400).json({ error: 'Invalid request', details: parsed.error.issues })
+      const summed = humanizeZodIssues(parsed.error.issues)
+      return res.status(400).json({ error: summed.message, messages: summed.messages, details: summed.details })
     }
     ;(req as any).validatedQuery = parsed.data
     next()
+  }
+}
+
+function humanizeZodIssue(issue: z.ZodIssue): string {
+  const path = issue.path.length ? issue.path.join('.') : 'field'
+  const msg = issue.message || 'invalid'
+  if (path === 'domain' || msg.toLowerCase().includes('invalid domain')) {
+    return 'Domain must look like example.com (no https://, path, or trailing slash)'
+  }
+  if (path === 'locale') return 'Locale must be he or en'
+  if (path === 'template') return 'Choose a report template: weekly, monthly, executive, or local-geo'
+  if (path === 'format') return 'Format must be json, html, or md'
+  if (path === 'status') return 'Status must be one of: queued, working, blocked, snoozed, verified, closed'
+  if (path === 'action') return 'Action must be close, reopen, snooze, or set-status'
+  if (msg.includes('Too small') || issue.code === 'too_small') return `${path} is required`
+  if (issue.code === 'invalid_type') return `${path}: expected a valid value`
+  return `${path}: ${msg}`
+}
+
+function humanizeZodIssues(issues: z.ZodIssue[]): { message: string; messages: string[]; details: z.ZodIssue[] } {
+  const messages = issues.map(humanizeZodIssue)
+  return {
+    message: messages[0] || 'Invalid request',
+    messages,
+    details: issues,
   }
 }
 
@@ -300,7 +339,12 @@ function validateBody(schema: z.ZodSchema) {
   return (req: express.Request, res: express.Response, next: express.NextFunction) => {
     const parsed = schema.safeParse(req.body)
     if (!parsed.success) {
-      return res.status(400).json({ error: 'Invalid request body', details: parsed.error.issues })
+      const summed = humanizeZodIssues(parsed.error.issues)
+      return res.status(400).json({
+        error: summed.message,
+        messages: summed.messages,
+        details: summed.details,
+      })
     }
     ;(req as any).validatedBody = parsed.data
     next()
@@ -1744,6 +1788,242 @@ app.get('/api/tasks', async (req, res) => {
     fetchedAt: new Date().toISOString(),
   })
 })
+
+// ── Task lifecycle (close / snooze / reopen) ───────────────────────────────────
+const taskStatusSchema = z.enum(['queued', 'working', 'blocked', 'snoozed', 'verified', 'closed'])
+const taskActionSchema = z.object({
+  action: z.enum(['close', 'reopen', 'snooze', 'set-status']).optional(),
+  status: taskStatusSchema.optional(),
+  snoozeHours: z.number().min(1).max(24 * 30).optional(),
+  note: z.string().max(500).optional().nullable(),
+})
+
+app.patch('/api/tasks/:id', validateBody(taskActionSchema), async (req, res) => {
+  if (!supabaseAdmin) {
+    return res.status(503).json({ error: 'SUPABASE_SERVICE_ROLE not configured — cannot update tasks' })
+  }
+  const id = String(req.params.id || '')
+  if (!id || id.length < 8) return res.status(400).json({ error: 'Invalid task id' })
+
+  const body = (req as any).validatedBody as z.infer<typeof taskActionSchema>
+  const action = body.action || (body.status ? 'set-status' : 'close')
+
+  const { data: existing, error: loadErr } = await supabaseAdmin
+    .from('seo_tasks')
+    .select('id, title, status, priority, brief, domain_id, updated_at, alert_id')
+    .eq('id', id)
+    .maybeSingle()
+  if (loadErr) return res.status(500).json({ error: loadErr.message })
+  if (!existing?.id) return res.status(404).json({ error: 'Task not found' })
+
+  let nextStatus: string = body.status || existing.status
+  let nextBrief = String(existing.brief || '')
+  const stamp = new Date().toISOString()
+  if (action === 'close') nextStatus = 'verified'
+  else if (action === 'reopen') nextStatus = 'queued'
+  else if (action === 'snooze') {
+    const hours = body.snoozeHours || 24
+    const until = new Date(Date.now() + hours * 60 * 60 * 1000).toISOString()
+    nextStatus = 'snoozed'
+    const tag = `[SNOOZED until ${until}]`
+    nextBrief = nextBrief.includes('[SNOOZED until')
+      ? nextBrief.replace(/\[SNOOZED until[^\]]*\]/, tag)
+      : `${tag}\n${nextBrief}`.trim()
+  } else if (action === 'set-status' && body.status) {
+    nextStatus = body.status
+  }
+
+  if (body.note) {
+    nextBrief = `${nextBrief}\n\nOperator note (${stamp}): ${body.note}`.trim()
+  }
+
+  const { data: updated, error: upErr } = await supabaseAdmin
+    .from('seo_tasks')
+    .update({ status: nextStatus, brief: nextBrief, updated_at: stamp })
+    .eq('id', id)
+    .select('id, title, status, priority, brief, alert_id, domain_id, created_at, updated_at')
+    .single()
+  if (upErr) return res.status(500).json({ error: upErr.message })
+
+  if ((action === 'close' || nextStatus === 'verified' || nextStatus === 'closed') && updated?.alert_id) {
+    await supabaseAdmin
+      .from('seo_alerts')
+      .update({ status: 'resolved', updated_at: stamp })
+      .eq('id', updated.alert_id)
+      .in('status', ['open', 'assigned', 'working'])
+  }
+
+  res.json({
+    ok: true,
+    task: {
+      id: updated.id,
+      title: updated.title,
+      status: updated.status,
+      priority: updated.priority,
+      brief: updated.brief,
+      alertId: updated.alert_id,
+      domainId: updated.domain_id,
+      createdAt: updated.created_at,
+      updatedAt: updated.updated_at,
+    },
+    fetchedAt: stamp,
+  })
+})
+
+app.get('/api/tasks/open-portfolio', async (req, res) => {
+  if (!supabaseAdmin) {
+    return res.json({ tasks: [], source: 'empty', fetchedAt: new Date().toISOString() })
+  }
+  const limit = Math.min(Math.max(Number((req.query as any).limit || 25), 1), 100)
+  const { data: tasks, error } = await supabaseAdmin
+    .from('seo_tasks')
+    .select('id, title, status, priority, brief, alert_id, domain_id, created_at, updated_at, seo_domains(domain, name)')
+    .in('status', ['queued', 'working', 'blocked'])
+    .order('created_at', { ascending: false })
+    .limit(limit)
+  if (error) return res.status(500).json({ error: error.message })
+  res.json({
+    tasks: (tasks || []).map((t: any) => ({
+      id: t.id,
+      title: t.title,
+      status: t.status,
+      priority: t.priority,
+      brief: t.brief,
+      alertId: t.alert_id,
+      domain: t.seo_domains?.domain || null,
+      domainName: t.seo_domains?.name || null,
+      createdAt: t.created_at,
+      updatedAt: t.updated_at,
+    })),
+    source: 'supabase',
+    fetchedAt: new Date().toISOString(),
+  })
+})
+
+async function sendDigestEmail(subject: string, text: string): Promise<{ ok: boolean; via: string; detail?: string }> {
+  const to = process.env.DIGEST_TO || 'tomer@webs.co.il'
+  const user = process.env.DIGEST_SMTP_USER || process.env.GMAIL_USER_WEBS || 'tomer@webs.co.il'
+  const pass = process.env.DIGEST_SMTP_PASS || process.env.GMAIL_APP_PASSWORD_WEBS || process.env.GMAIL_APP_PASSWORD || ''
+  if (!pass) {
+    console.warn('[digest] no SMTP password configured — log-only')
+    console.log('[digest]', subject, text.slice(0, 1500))
+    return { ok: false, via: 'log-only', detail: 'SMTP password missing' }
+  }
+  try {
+    const nodemailer = await import('nodemailer')
+    const transporter = nodemailer.createTransport({
+      host: 'smtp.gmail.com',
+      port: 587,
+      secure: false,
+      auth: { user, pass },
+    })
+    await transporter.sendMail({ from: `SEO Dashboard <${user}>`, to, subject, text })
+    return { ok: true, via: 'gmail-smtp' }
+  } catch (err: any) {
+    console.error('[digest] send failed', err?.message || err)
+    console.log('[digest-fallback]', subject, text.slice(0, 1500))
+    return { ok: false, via: 'error', detail: err?.message || String(err) }
+  }
+}
+
+async function runNightlySync(opts: { limit?: number; createTasks?: boolean; sendDigest?: boolean }) {
+  if (!supabaseAdmin) throw new Error('SUPABASE_SERVICE_ROLE not configured')
+  const limit = Math.min(Math.max(Number(opts.limit || 20), 1), 50)
+  const createTasks = opts.createTasks !== false
+  const { data: domains, error } = await supabaseAdmin
+    .from('seo_domains')
+    .select('id, domain, name, status')
+    .eq('status', 'active')
+    .order('domain', { ascending: true })
+    .limit(limit)
+  if (error) throw new Error(error.message)
+  if (!domains?.length) throw new Error('No domains found')
+
+  const results: any[] = []
+  let alertsTotal = 0
+  let tasksTotal = 0
+  for (const d of domains) {
+    const snaps = await loadLatestSnapshots(supabaseAdmin, [d.id], 20)
+    const alerts = alertsFromSnapshotRows(d.domain, snaps as any)
+    const persisted = await persistAlertsAndTasks({
+      admin: supabaseAdmin,
+      domainId: d.id,
+      domain: d.domain,
+      alerts,
+      createTasks,
+    })
+    alertsTotal += persisted.alertsUpserted
+    tasksTotal += persisted.tasksUpserted
+    results.push({ domain: d.domain, alertsGenerated: alerts.length, ...persisted })
+  }
+
+  const { data: openTasks } = await supabaseAdmin
+    .from('seo_tasks')
+    .select('id, title, status, priority, domain_id, seo_domains(domain)')
+    .in('status', ['queued', 'working', 'blocked'])
+    .order('created_at', { ascending: false })
+    .limit(15)
+
+  const lines = [
+    `SEO Dashboard nightly sync ${new Date().toISOString()}`,
+    '',
+    `Domains synced: ${results.length}`,
+    `Alerts upserted: ${alertsTotal}`,
+    `Tasks upserted: ${tasksTotal}`,
+    '',
+    `Open tasks snapshot:`,
+    ...((openTasks || []).map((t: any) => `- [${t.priority}/${t.status}] ${t.seo_domains?.domain || '?'}: ${t.title}`)),
+    '',
+    'Dashboard: https://seo-dashboard.maximo-seo.ai',
+  ]
+  const digestText = lines.join('\n')
+  const mail =
+    opts.sendDigest === false
+      ? { ok: false, via: 'skipped' }
+      : await sendDigestEmail(
+          `[SEO Dashboard] Nightly sync — ${results.length} domains, ${alertsTotal} alerts`,
+          digestText,
+        )
+
+  return {
+    ok: true,
+    synced: results.length,
+    alertsTotal,
+    tasksTotal,
+    digest: mail,
+    results,
+    fetchedAt: new Date().toISOString(),
+  }
+}
+
+app.get('/api/cron/health', (_req, res) => {
+  res.json({ ok: true, service: 'seo-dashboard-cron', time: new Date().toISOString() })
+})
+
+app.get('/api/cron/nightly-sync', expensiveLimiter, async (req, res) => {
+  try {
+    const limit = Number((req.query as any).limit || 20)
+    const payload = await runNightlySync({ limit, createTasks: true, sendDigest: true })
+    res.json(payload)
+  } catch (err: any) {
+    res.status(500).json({ error: err?.message || String(err) })
+  }
+})
+
+app.post('/api/cron/nightly-sync', expensiveLimiter, async (req, res) => {
+  try {
+    const body = (req.body || {}) as { limit?: number; createTasks?: boolean; sendDigest?: boolean }
+    const payload = await runNightlySync({
+      limit: body.limit ?? Number((req.query as any).limit || 20),
+      createTasks: body.createTasks !== false,
+      sendDigest: body.sendDigest !== false,
+    })
+    res.json(payload)
+  } catch (err: any) {
+    res.status(500).json({ error: err?.message || String(err) })
+  }
+})
+
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // P1/P2 Command center + Sync + Bridges

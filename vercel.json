@@ -15,5 +15,11 @@
         { "key": "Permissions-Policy", "value": "camera=(), microphone=(), geolocation=()" }
       ]
     }
+  ],
+  "crons": [
+    {
+      "path": "/api/cron/nightly-sync",
+      "schedule": "0 2 * * *"
+    }
   ]
 }

@@ -1,78 +1,130 @@
 import { useMemo, useState } from 'react'
-import { useQuery } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { DataCard } from '@/components/DataCard'
 import DataStateBadge from '@/components/DataStateBadge'
 import { useSEO } from '@/contexts/SEOContext'
 import { authFetch } from '@/lib/authToken'
+import { readApiError } from '@/lib/apiErrors'
 
-type TaskStatus = 'queued' | 'working' | 'blocked' | 'verified'
+type TaskStatus = 'queued' | 'working' | 'blocked' | 'snoozed' | 'verified' | 'closed'
 type TaskPriority = 'low' | 'medium' | 'high' | 'critical'
 
 interface SeoTask {
   id: string
-  domain: string
+  domain?: string
   title: string
   status: TaskStatus
   priority: TaskPriority
-  module: string
+  module?: string
   brief: string
   acceptanceCriteria?: string[]
 }
 
-const fallbackTasks: SeoTask[] = [
-  { id: 'fallback-rankings', title: 'Investigate ranking drop', module: 'Rankings', priority: 'high', status: 'queued', domain: 'maximo-seo.ai', brief: 'Provider-backed task API is unavailable; use this as a workflow template.' },
-]
-
-async function fetchTasks(domain: string): Promise<{ tasks: SeoTask[]; source: string; fetchedAt: string }> {
+async function fetchTasks(domain: string): Promise<{ tasks: SeoTask[]; source: string; fetchedAt: string; message?: string }> {
   const res = await authFetch(`/api/tasks?domain=${encodeURIComponent(domain)}`)
-  if (!res.ok) throw new Error(`Tasks API failed: ${res.status}`)
+  if (!res.ok) throw new Error(await readApiError(res, 'Tasks API failed'))
+  return res.json()
+}
+
+async function patchTask(id: string, body: { action?: string; snoozeHours?: number; note?: string }) {
+  const res = await authFetch(`/api/tasks/${encodeURIComponent(id)}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+  if (!res.ok) throw new Error(await readApiError(res, 'Task update failed'))
   return res.json()
 }
 
 export default function TasksPage() {
   const { domain } = useSEO()
+  const qc = useQueryClient()
   const [status, setStatus] = useState<TaskStatus | 'all'>('all')
-  const { data, isLoading, error } = useQuery({ queryKey: ['tasks', domain], queryFn: () => fetchTasks(domain), staleTime: 5 * 60 * 1000 })
-  const tasks = useMemo(() => (data?.tasks?.length ? data.tasks : fallbackTasks.map(task => ({ ...task, domain }))), [data, domain])
-  const filtered = status === 'all' ? tasks : tasks.filter(t => t.status === status)
-  const dataState = error ? 'unavailable' : data ? 'live' : isLoading ? 'loading' : 'cached'
+  const [actionError, setActionError] = useState<string | null>(null)
+  const { data, isLoading, error } = useQuery({
+    queryKey: ['tasks', domain],
+    queryFn: () => fetchTasks(domain),
+    staleTime: 60 * 1000,
+  })
+
+  const mutation = useMutation({
+    mutationFn: ({ id, body }: { id: string; body: { action?: string; snoozeHours?: number } }) => patchTask(id, body),
+    onSuccess: async () => {
+      setActionError(null)
+      await qc.invalidateQueries({ queryKey: ['tasks', domain] })
+    },
+    onError: (err) => setActionError(err instanceof Error ? err.message : 'Update failed'),
+  })
+
+  const tasks = data?.tasks || []
+  const filtered = status === 'all' ? tasks : tasks.filter((t) => t.status === status)
+  const dataState = error ? 'unavailable' : isLoading ? 'loading' : data?.source === 'empty' ? 'unavailable' : data ? 'live' : 'cached'
+  const counts = useMemo(() => {
+    const base: Record<string, number> = { queued: 0, working: 0, blocked: 0, verified: 0, snoozed: 0, closed: 0 }
+    for (const t of tasks) base[t.status] = (base[t.status] || 0) + 1
+    return base
+  }, [tasks])
 
   return (
     <div className="space-y-4 lg:space-y-5 max-w-[1400px]">
       <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h2 className="text-base md:text-lg font-semibold text-fg">Tasks / Agents</h2>
-          <p className="text-xs md:text-sm text-fg-muted mt-0.5">Operator queue generated from alerts, opportunities and audits</p>
+          <p className="text-xs md:text-sm text-fg-muted mt-0.5">
+            Operator queue from live alerts — close, snooze, or reopen without inventing demo work
+          </p>
         </div>
-        <DataStateBadge state={dataState} source={data?.source || 'rules fallback'} fetchedAt={data?.fetchedAt} />
+        <DataStateBadge state={dataState as any} source={data?.source || 'empty'} fetchedAt={data?.fetchedAt} />
       </div>
 
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-        {(['queued', 'working', 'blocked', 'verified'] as TaskStatus[]).map(s => (
-          <button key={s} onClick={() => setStatus(s)} className={`rounded-xl border p-4 text-left transition-colors ${status === s ? 'border-accent bg-accent/10' : 'border-border bg-bg-card hover:border-border-light'}`}>
+        {(['queued', 'working', 'blocked', 'verified'] as TaskStatus[]).map((s) => (
+          <button
+            key={s}
+            onClick={() => setStatus(s)}
+            className={`rounded-xl border p-4 text-left transition-colors ${
+              status === s ? 'border-accent bg-accent/10' : 'border-border bg-bg-card hover:border-border-light'
+            }`}
+          >
             <p className="text-[11px] uppercase tracking-wide text-fg-dim">{s}</p>
-            <p className="mt-1 text-2xl font-bold text-fg">{tasks.filter(t => t.status === s).length}</p>
+            <p className="mt-1 text-2xl font-bold text-fg">{counts[s] || 0}</p>
           </button>
         ))}
       </div>
 
+      {(error || actionError || data?.message) && (
+        <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 p-3 text-sm text-amber-100">
+          {error instanceof Error ? error.message : actionError || data?.message}
+        </div>
+      )}
+
       <DataCard
         title="SEO action queue"
-        dataState={dataState}
+        dataState={dataState as any}
         fetchedAt={data?.fetchedAt}
-        headerRight={<button onClick={() => setStatus('all')} className="text-xs text-accent hover:text-accent-light">Show all</button>}
+        headerRight={
+          <button onClick={() => setStatus('all')} className="text-xs text-accent hover:text-accent-light">
+            Show all
+          </button>
+        }
       >
         <div className="space-y-3">
-          {filtered.map(task => (
+          {filtered.map((task) => (
             <div key={task.id} className="rounded-xl border border-border bg-bg-darkest p-4">
               <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
                 <div>
                   <p className="font-semibold text-fg">{task.title}</p>
-                  <p className="mt-1 text-xs text-fg-muted">{task.module} • {task.domain}</p>
+                  <p className="mt-1 text-xs text-fg-muted">
+                    {(task.module || 'SEO') + ' • ' + (task.domain || domain)}
+                  </p>
                 </div>
-                <div className="flex gap-2">
-                  <span className="rounded-full border border-white/10 bg-white/[0.04] px-2 py-0.5 text-[10px] text-fg-dim">{task.priority}</span>
-                  <span className="rounded-full border border-accent/30 bg-accent/10 px-2 py-0.5 text-[10px] text-accent-light">{task.status}</span>
+                <div className="flex flex-wrap gap-2">
+                  <span className="rounded-full border border-white/10 bg-white/[0.04] px-2 py-0.5 text-[10px] text-fg-dim">
+                    {task.priority}
+                  </span>
+                  <span className="rounded-full border border-accent/30 bg-accent/10 px-2 py-0.5 text-[10px] text-accent-light">
+                    {task.status}
+                  </span>
                 </div>
               </div>
               <div className="mt-3 rounded-lg border border-white/10 bg-white/[0.03] p-3 text-xs leading-relaxed text-fg-muted whitespace-pre-line">
@@ -80,11 +132,41 @@ export default function TasksPage() {
               </div>
               {!!task.acceptanceCriteria?.length && (
                 <ul className="mt-3 list-disc pl-5 text-xs text-fg-muted space-y-1">
-                  {task.acceptanceCriteria.map(item => <li key={item}>{item}</li>)}
+                  {task.acceptanceCriteria.map((item) => (
+                    <li key={item}>{item}</li>
+                  ))}
                 </ul>
               )}
+              <div className="mt-3 flex flex-wrap gap-2">
+                <button
+                  disabled={mutation.isPending || task.status === 'verified' || task.status === 'closed'}
+                  onClick={() => mutation.mutate({ id: task.id, body: { action: 'close' } })}
+                  className="rounded-lg border border-green/30 bg-green/10 px-2.5 py-1 text-[11px] font-medium text-green disabled:opacity-40"
+                >
+                  Close / verify
+                </button>
+                <button
+                  disabled={mutation.isPending || task.status === 'snoozed'}
+                  onClick={() => mutation.mutate({ id: task.id, body: { action: 'snooze', snoozeHours: 24 } })}
+                  className="rounded-lg border border-amber-400/30 bg-amber-400/10 px-2.5 py-1 text-[11px] font-medium text-amber-100 disabled:opacity-40"
+                >
+                  Snooze 24h
+                </button>
+                <button
+                  disabled={mutation.isPending || task.status === 'queued'}
+                  onClick={() => mutation.mutate({ id: task.id, body: { action: 'reopen' } })}
+                  className="rounded-lg border border-border px-2.5 py-1 text-[11px] text-fg-muted hover:border-border-light disabled:opacity-40"
+                >
+                  Reopen
+                </button>
+              </div>
             </div>
           ))}
+          {!isLoading && filtered.length === 0 && (
+            <p className="text-sm text-fg-muted">
+              No durable tasks for this filter. Run <b>Sync spine</b> from Command Center after alerts exist.
+            </p>
+          )}
         </div>
       </DataCard>
     </div>
