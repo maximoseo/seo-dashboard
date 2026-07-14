@@ -42,6 +42,12 @@ export function buildLocalSeoOverview(input: {
     rankingLocalFeatures?: number
     lastFetchedAt?: string | null
     softDegraded?: string[]
+    localFalcon?: {
+      campaignsTotal?: number | null
+      reportsTotal?: number | null
+      locationsTotal?: number | null
+      sampleReports?: any[]
+    } | null
   }
 }) {
   const domain = String(input.domain || '').replace(/^https?:\/\//, '').replace(/\/$/, '')
@@ -51,6 +57,10 @@ export function buildLocalSeoOverview(input: {
   const localFeatures = input.snapshotMeta?.rankingLocalFeatures || 0
   const soft = input.snapshotMeta?.softDegraded || []
   const last = input.snapshotMeta?.lastFetchedAt || null
+  const lf = input.snapshotMeta?.localFalcon || null
+  const lfReports = Number(lf?.reportsTotal || 0) || 0
+  const lfCampaigns = Number(lf?.campaignsTotal || 0) || 0
+  const lfLocations = Number(lf?.locationsTotal || 0) || 0
 
   const checks: ModuleCheck[] = [
     {
@@ -77,13 +87,26 @@ export function buildLocalSeoOverview(input: {
     },
     {
       name: 'Local rank grid',
-      status: localFeatures > 0 ? 'partial' : local ? 'partial' : 'planned',
+      status: lfReports > 0 || lfCampaigns > 0 ? 'live' : localFeatures > 0 ? 'partial' : local ? 'partial' : 'planned',
       detail:
-        localFeatures > 0
-          ? `Detected ${localFeatures} keyword rows with local SERP features (local pack / maps). Expand to geo-grid when Local Falcon key is present.`
-          : 'No local-pack SERP features in keyword snapshot yet. Sync keywords or hook Local Falcon grid.',
-      score: localFeatures > 0 ? Math.min(90, 40 + localFeatures * 5) : null,
-      evidence: [`keywordRows:${kw}`, `localFeatures:${localFeatures}`],
+        lfReports > 0 || lfCampaigns > 0
+          ? `Local Falcon connected: ${lfCampaigns} campaigns · ${lfReports} reports · ${lfLocations} locations. Keyword spine local features: ${localFeatures}.`
+          : localFeatures > 0
+            ? `Detected ${localFeatures} keyword rows with local SERP features (local pack / maps). Expand to geo-grid when Local Falcon reports exist.`
+            : 'No local-pack SERP features in keyword snapshot yet. Sync keywords or run Local Falcon grids.',
+      score:
+        lfReports > 0 || lfCampaigns > 0
+          ? Math.min(95, 55 + Math.min(30, Math.round(lfReports / 50)))
+          : localFeatures > 0
+            ? Math.min(90, 40 + localFeatures * 5)
+            : null,
+      evidence: [
+        `keywordRows:${kw}`,
+        `localFeatures:${localFeatures}`,
+        `lfCampaigns:${lfCampaigns}`,
+        `lfReports:${lfReports}`,
+        `lfLocations:${lfLocations}`,
+      ],
     },
     {
       name: 'NAP consistency',
@@ -122,6 +145,16 @@ export function buildGeoAiOverview(input: {
     lastFetchedAt?: string | null
     softDegraded?: string[]
     topKeywords?: Array<{ keyword: string; position: number | null }>
+    morningscore?: {
+      available?: boolean
+      reason?: string
+      domain?: string
+      score?: number | null
+      keywords?: number | null
+      traffic?: number | null
+      historyHasData?: boolean
+      historyPoints?: any[]
+    } | null
   }
 }) {
   const domain = String(input.domain || '').replace(/^https?:\/\//, '').replace(/\/$/, '')
@@ -130,6 +163,7 @@ export function buildGeoAiOverview(input: {
   const kw = input.snapshotMeta?.keywordsCount || 0
   const soft = input.snapshotMeta?.softDegraded || []
   const top = input.snapshotMeta?.topKeywords || []
+  const ms = input.snapshotMeta?.morningscore || null
 
   const checks: ModuleCheck[] = [
     {
@@ -143,6 +177,30 @@ export function buildGeoAiOverview(input: {
             : 'No keyword spine yet. Sync keywords_agg to evaluate AI Overview exposure.',
       score: aiCount > 0 ? Math.min(95, 50 + aiCount * 5) : kw > 0 ? 35 : null,
       evidence: [`aiOverviewKeywords:${aiCount}`, `trackedKeywords:${kw}`],
+    },
+    {
+      name: 'Morningscore domain pulse',
+      status:
+        ms && ms.available === false
+          ? 'partial'
+          : ms && (ms.score != null || ms.keywords != null)
+            ? 'live'
+            : 'planned',
+      detail:
+        ms && ms.available === false
+          ? `Domain is not registered in the Morningscore account (${ms.reason || 'not_linked'}). Score/history unavailable until the domain is added there.`
+          : ms && (ms.score != null || ms.keywords != null)
+            ? `Morningscore score=${ms.score ?? '—'} · keywords=${ms.keywords ?? '—'} · traffic=${ms.traffic ?? '—'} · history=${ms.historyHasData ? 'yes' : 'no'}.`
+            : 'Connect domain in Morningscore account to pull score history + GEO-adjacent visibility signals.',
+      score:
+        ms && ms.score != null
+          ? Math.max(0, Math.min(100, Math.round(Number(ms.score) > 100 ? Number(ms.score) / 100 : Number(ms.score))))
+          : null,
+      evidence: [
+        `msScore:${ms?.score ?? 'na'}`,
+        `msKeywords:${ms?.keywords ?? 'na'}`,
+        `msHistory:${ms?.historyHasData ? 'yes' : 'no'}`,
+      ],
     },
     {
       name: 'Entity completeness',

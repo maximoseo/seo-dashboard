@@ -449,7 +449,7 @@ const AHREFS_API_KEY = process.env.AHREFS_API_KEY || process.env.AHREFS_API || '
 const SEMRUSH_API_KEY = process.env.SEMRUSH_API || process.env.SEMRUSH_API_KEY || ''
 const DATAFORSEO_LOGIN = process.env.DATAFORSEO_LOGIN || ''
 const DATAFORSEO_PASSWORD = process.env.DATAFORSEO_PASSWORD || ''
-const PAGESPEED_API_KEY = process.env.PAGESPEED_API_KEY || process.env.GOOGLE_GEMINI_API || ''
+const PAGESPEED_API_KEY = process.env.PAGESPEED_API_KEY || process.env.GOOGLE_PSI_API_KEY || process.env.GOOGLE_API_KEY || ''
 const GTMETRIX_API_KEY = process.env.GTMETRIX_API || process.env.GTMETRIX_API_KEY || ''
 const GTMETRIX_EMAIL = process.env.GTMETRIX_EMAIL || 'tomerake@gmail.com'
 const SE_RANKING_API =
@@ -1454,50 +1454,86 @@ app.get('/api/keywords/aggregated', expensiveLimiter, async (req, res) => {
     fetchedAt: new Date().toISOString(),
   }
 
+  const rowLimit = Math.min(Math.max(Number(limit) || 50, 10), 100)
   const calls = await Promise.allSettled([
-    axios.get('https://api.ahrefs.com/v3/site-explorer/organic-keywords', {
-      params: { target: domain, date: today, mode: 'subdomains', limit: limit || '50' },
-      headers: { Authorization: `Bearer ${AHREFS_API_KEY}` }, timeout: 10000,
-    }),
-    axios.get('https://api.semrush.com/', {
-      params: { type: 'domain_organic', key: SEMRUSH_API_KEY, domain, database: pack.semrushDatabase, display_limit: limit || 50, export_columns: 'Ph,Po,Pp,Nq,Cp,Co,Kd,Ur,Tr,Tc,Nr,Td' },
-      timeout: 10000,
-    }),
-    axios.post('https://api.dataforseo.com/v3/dataforseo_labs/google/ranked_keywords/live',
-      [{ target: domain, language_name: pack.dfsLanguageName, location_code: pack.dfsLocationCode, limit: Number(limit) || 50 }],
-      { headers: { Authorization: `Basic ${DATAFORSEO_AUTH}`, 'Content-Type': 'application/json' }, timeout: 10000 }),
-    SE_RANKING_API ? serankingSafeGet(domain, 'keywords', limit, pack) : Promise.reject('No API key'),
+    // Ahrefs v3 requires `select`
+    AHREFS_API_KEY
+      ? axios.get('https://api.ahrefs.com/v3/site-explorer/organic-keywords', {
+          params: {
+            target: domain,
+            date: today,
+            mode: 'subdomains',
+            limit: rowLimit,
+            select: 'keyword,volume,best_position,sum_traffic,best_position_url,cpc,keyword_difficulty',
+          },
+          headers: { Authorization: `Bearer ${AHREFS_API_KEY}` },
+          timeout: 15000,
+        })
+      : Promise.reject('No Ahrefs key'),
+    SEMRUSH_API_KEY
+      ? axios.get('https://api.semrush.com/', {
+          params: {
+            type: 'domain_organic',
+            key: SEMRUSH_API_KEY,
+            domain,
+            database: pack.semrushDatabase,
+            display_limit: rowLimit,
+            export_columns: 'Ph,Po,Pp,Nq,Cp,Co,Kd,Ur,Tr,Tc,Nr,Td',
+          },
+          timeout: 15000,
+        })
+      : Promise.reject('No SEMrush key'),
+    DATAFORSEO_AUTH
+      ? axios.post(
+          'https://api.dataforseo.com/v3/dataforseo_labs/google/ranked_keywords/live',
+          [{ target: domain, language_name: pack.dfsLanguageName, location_code: pack.dfsLocationCode, limit: rowLimit }],
+          { headers: { Authorization: `Basic ${DATAFORSEO_AUTH}`, 'Content-Type': 'application/json' }, timeout: 20000 },
+        )
+      : Promise.reject('No DataForSEO'),
     SERPSTAT_API_KEY
       ? serpstatRpc('SerpstatDomainProcedure.getDomainKeywords', {
           domain,
           se: pack.serpstatSe,
           page: 1,
-          size: Math.min(Number(limit) || 50, 100),
+          size: rowLimit,
         })
-      : Promise.reject('No API key'),
+      : Promise.reject('No Serpstat key'),
+    // Morningscore domain score (stable, account domains only)
+    MORNINGSCORE_API_KEY
+      ? morningscoreResolveDomainId(domain).then(async (resolved) => {
+          if (!resolved) return { skipped: true, reason: 'domain_not_in_morningscore_account' }
+          const detail = await morningscoreGet(`/v1/domains/${resolved.id}`, 20000)
+          return { resolved, detail }
+        })
+      : Promise.reject('No Morningscore key'),
   ])
 
-  const [ahrefs, semrush, dataforseo, seranking, serpstat] = calls
+  const [ahrefs, semrush, dataforseo, serpstat, morningscore] = calls
   if (ahrefs.status === 'fulfilled') { result.sources.ahrefs = ahrefs.value.data; result.activeSources.push('Ahrefs') }
+  else if (AHREFS_API_KEY) result.softDegraded.push('Ahrefs')
   if (semrush.status === 'fulfilled') { result.sources.semrush = parseSemrushCSV(semrush.value.data); result.activeSources.push('SEMrush') }
+  else if (SEMRUSH_API_KEY) result.softDegraded.push('SEMrush')
   if (dataforseo.status === 'fulfilled') { result.sources.dataforseo = dataforseo.value.data; result.activeSources.push('DataForSEO') }
-  if (seranking.status === 'fulfilled') {
-    const ser = seranking.value as any
-    if (ser?.softDegraded || ser?.state === 'soft_degraded' || ser?.ok === false) {
-      result.sources.seranking = ser
-      result.softDegraded.push('SE Ranking')
-    } else {
-      result.sources.seranking = ser?.data ?? ser
-      result.activeSources.push('SE Ranking')
-    }
-  } else if (SE_RANKING_API) {
-    result.softDegraded.push('SE Ranking')
-  }
+  else if (DATAFORSEO_AUTH) result.softDegraded.push('DataForSEO')
   if (serpstat.status === 'fulfilled') {
     result.sources.serpstat = serpstat.value
     result.activeSources.push('Serpstat')
   } else if (SERPSTAT_API_KEY) {
     result.softDegraded.push('Serpstat')
+  }
+  if (morningscore.status === 'fulfilled') {
+    const ms = morningscore.value as any
+    if (ms?.skipped) result.sources.morningscore = { available: false, reason: ms.reason }
+    else if (ms?.detail) {
+      result.sources.morningscore = ms.detail
+      result.activeSources.push('Morningscore')
+    }
+  } else if (MORNINGSCORE_API_KEY) {
+    result.softDegraded.push('Morningscore')
+  }
+  // SE Ranking: key present but auth unstable — skip live call to avoid softDegraded spam
+  if (SE_RANKING_API) {
+    result.sources.seranking = { configured: true, active: false, note: 'SE Ranking auth unstable; skipped' }
   }
 
   let keywords = mergeKeywordRows([
@@ -1976,6 +2012,7 @@ app.get('/api/pages/aggregated', expensiveLimiter, async (req, res) => {
     fetchedAt: new Date().toISOString(),
   }
 
+  const today = new Date().toISOString().slice(0, 10)
   const calls = await Promise.allSettled([
     SEMRUSH_API_KEY
       ? axios.get('https://api.semrush.com/', {
@@ -1990,7 +2027,7 @@ app.get('/api/pages/aggregated', expensiveLimiter, async (req, res) => {
           timeout: 15000,
         })
       : Promise.reject(new Error('No SEMrush key')),
-    DATAFORSEO_LOGIN
+    DATAFORSEO_AUTH
       ? axios.post(
           'https://api.dataforseo.com/v3/dataforseo_labs/google/relevant_pages/live',
           [{
@@ -2002,16 +2039,29 @@ app.get('/api/pages/aggregated', expensiveLimiter, async (req, res) => {
           { headers: { Authorization: `Basic ${DATAFORSEO_AUTH}`, 'Content-Type': 'application/json' }, timeout: 20000 },
         )
       : Promise.reject(new Error('No DataForSEO key')),
-    DATAFORSEO_LOGIN
+    DATAFORSEO_AUTH
       ? axios.post(
           'https://api.dataforseo.com/v3/backlinks/domain_pages_summary/live',
           [{ target: domain, include_subdomains: true, limit: Math.min(pageLimit, 100) }],
           { headers: { Authorization: `Basic ${DATAFORSEO_AUTH}`, 'Content-Type': 'application/json' }, timeout: 15000 },
         )
       : Promise.reject(new Error('No DataForSEO key')),
+    AHREFS_API_KEY
+      ? axios.get('https://api.ahrefs.com/v3/site-explorer/top-pages', {
+          params: {
+            target: domain,
+            date: today,
+            mode: 'subdomains',
+            limit: Math.min(pageLimit, 100),
+            select: 'url,sum_traffic,keywords',
+          },
+          headers: { Authorization: `Bearer ${AHREFS_API_KEY}` },
+          timeout: 15000,
+        })
+      : Promise.reject(new Error('No Ahrefs key')),
   ])
 
-  const [semrushRes, dfsRelevantRes, dfsDomainPagesRes] = calls
+  const [semrushRes, dfsRelevantRes, dfsDomainPagesRes, ahrefsPagesRes] = calls
 
   if (semrushRes.status === 'fulfilled') {
     result.sources.semrush = parseSemrushCSV(semrushRes.value.data)
@@ -2027,6 +2077,15 @@ app.get('/api/pages/aggregated', expensiveLimiter, async (req, res) => {
     if (result.sources.dataforseo_domain_pages && !result.activeSources.includes('DataForSEO')) {
       result.activeSources.push('DataForSEO')
     }
+  }
+  if (ahrefsPagesRes.status === 'fulfilled') {
+    result.sources.ahrefs_top_pages = ahrefsPagesRes.value.data ?? ahrefsPagesRes.value
+    const pages = result.sources.ahrefs_top_pages?.pages || result.sources.ahrefs_top_pages
+    if (Array.isArray(pages) && pages.length && !result.activeSources.includes('Ahrefs')) {
+      result.activeSources.push('Ahrefs')
+    }
+  } else if (AHREFS_API_KEY) {
+    result.softDegraded.push('Ahrefs')
   }
 
   // Rollup keywords inventory by landing URL (cached snapshot — free population signal)
@@ -2142,6 +2201,22 @@ app.get('/api/pages/aggregated', expensiveLimiter, async (req, res) => {
     }
   }
 
+  // Ahrefs top pages (stable when select is provided)
+  {
+    const pages =
+      result.sources.ahrefs_top_pages?.pages ||
+      (Array.isArray(result.sources.ahrefs_top_pages) ? result.sources.ahrefs_top_pages : [])
+    if (Array.isArray(pages)) {
+      for (const item of pages) {
+        const rawUrl = String(item?.url || item?.page || '')
+        const r = ensure(rawUrl, 'Ahrefs')
+        if (!r) continue
+        r.traffic = Math.max(r.traffic, Number(item?.sum_traffic ?? item?.traffic ?? 0) || 0)
+        r.keywords = Math.max(r.keywords, Number(item?.keywords ?? item?.keywords_count ?? 0) || 0)
+      }
+    }
+  }
+
   // Keyword inventory rollup by URL
   for (const kw of keywordSnap) {
     if (!kw?.url) continue
@@ -2228,48 +2303,61 @@ app.get('/api/competitors/aggregated', expensiveLimiter, async (req, res) => {
   }
 
   const calls = await Promise.allSettled([
-    axios.get('https://api.semrush.com/', {
-      params: { type: 'domain_organic_organic', key: SEMRUSH_API_KEY, domain, database: pack.semrushDatabase, display_limit: 10, export_columns: 'Dn,Cr,Np,Or,Ot,Oc,Ad' },
-      timeout: 10000,
-    }),
-    axios.post('https://api.dataforseo.com/v3/dataforseo_labs/google/competitors_domain/live',
-      [{ target: domain, language_name: pack.dfsLanguageName, location_code: pack.dfsLocationCode, limit: 10 }],
-      { headers: { Authorization: `Basic ${DATAFORSEO_AUTH}`, 'Content-Type': 'application/json' }, timeout: 10000 }),
-    SE_RANKING_API ? serankingSafeGet(domain, 'competitors', undefined, pack) : Promise.reject('No API key'),
-    EXA_API_KEY ? axios.post('https://api.exa.ai/findSimilar', {
-      url: `https://${domain}`, numResults: 10,
-      contents: { text: { maxCharacters: 300 }, highlights: { numSentences: 2 } },
-    }, { headers: { 'x-api-key': EXA_API_KEY, 'Content-Type': 'application/json' }, timeout: 10000 }) : Promise.reject('No API key'),
+    SEMRUSH_API_KEY
+      ? axios.get('https://api.semrush.com/', {
+          params: {
+            type: 'domain_organic_organic',
+            key: SEMRUSH_API_KEY,
+            domain,
+            database: pack.semrushDatabase,
+            display_limit: 10,
+            export_columns: 'Dn,Cr,Np,Or,Ot,Oc,Ad',
+          },
+          timeout: 15000,
+        })
+      : Promise.reject('No SEMrush key'),
+    DATAFORSEO_AUTH
+      ? axios.post(
+          'https://api.dataforseo.com/v3/dataforseo_labs/google/competitors_domain/live',
+          [{ target: domain, language_name: pack.dfsLanguageName, location_code: pack.dfsLocationCode, limit: 10 }],
+          { headers: { Authorization: `Basic ${DATAFORSEO_AUTH}`, 'Content-Type': 'application/json' }, timeout: 20000 },
+        )
+      : Promise.reject('No DataForSEO'),
+    EXA_API_KEY
+      ? axios.post(
+          'https://api.exa.ai/findSimilar',
+          {
+            url: `https://${domain}`,
+            numResults: 10,
+            contents: { text: { maxCharacters: 300 }, highlights: { numSentences: 2 } },
+          },
+          { headers: { 'x-api-key': EXA_API_KEY, 'Content-Type': 'application/json' }, timeout: 15000 },
+        )
+      : Promise.reject('No Exa key'),
     SERPSTAT_API_KEY
       ? serpstatRpc('SerpstatDomainProcedure.getDomainsCompetitors', {
           domain,
           se: pack.serpstatSe,
           size: 10,
         })
-      : Promise.reject('No API key'),
+      : Promise.reject('No Serpstat key'),
   ])
 
-  const [semrush, dataforseo, seranking, exa, serpstat] = calls
+  const [semrush, dataforseo, exa, serpstat] = calls
   if (semrush.status === 'fulfilled') { result.sources.semrush = parseSemrushCSV(semrush.value.data); result.activeSources.push('SEMrush') }
+  else if (SEMRUSH_API_KEY) result.softDegraded.push('SEMrush')
   if (dataforseo.status === 'fulfilled') { result.sources.dataforseo = dataforseo.value.data; result.activeSources.push('DataForSEO') }
-  if (seranking.status === 'fulfilled') {
-    const ser = seranking.value as any
-    if (ser?.softDegraded || ser?.state === 'soft_degraded' || ser?.ok === false) {
-      result.sources.seranking = ser
-      result.softDegraded.push('SE Ranking')
-    } else {
-      result.sources.seranking = ser?.data ?? ser
-      result.activeSources.push('SE Ranking')
-    }
-  } else if (SE_RANKING_API) {
-    result.softDegraded.push('SE Ranking')
-  }
+  else if (DATAFORSEO_AUTH) result.softDegraded.push('DataForSEO')
   if (exa.status === 'fulfilled') { result.sources.exa = exa.value.data?.results; result.activeSources.push('Exa') }
+  else if (EXA_API_KEY) result.softDegraded.push('Exa')
   if (serpstat.status === 'fulfilled') {
     result.sources.serpstat = serpstat.value
     result.activeSources.push('Serpstat')
   } else if (SERPSTAT_API_KEY) {
     result.softDegraded.push('Serpstat')
+  }
+  if (SE_RANKING_API) {
+    result.sources.seranking = { configured: true, active: false, note: 'SE Ranking auth unstable; skipped' }
   }
 
   const competitors = mergeCompetitors([
@@ -3481,7 +3569,8 @@ app.get('/api/reports/share/:id', (req, res) => {
 })
 
 app.get('/api/local-seo/overview', async (req, res) => {
-  const domain = String((req.query as any).domain || 'maximo-seo.ai').replace(/^https?:\/\//, '').replace(/\/$/, '')
+  const domain = String((req.query as any).domain || '').replace(/^https?:\/\//, '').replace(/\/$/, '')
+  if (!domain) return res.status(400).json({ error: 'domain required' })
   const market = (req.query as any).market || null
   try {
     const kwSnap = await loadSnapshotPayload(domain, 'keywords_agg')
@@ -3490,6 +3579,36 @@ app.get('/api/local-seo/overview', async (req, res) => {
     const softDegraded = [
       ...(Array.isArray(kwSnap?.data?.softDegraded) ? kwSnap!.data.softDegraded : []),
     ]
+
+    let localFalcon: any = null
+    if (LOCAL_FALCON_API_KEY) {
+      try {
+        // Stable endpoints verified live: /v1/campaigns + /v1/reports + /v1/locations
+        const [campaigns, reports, locations] = await Promise.all([
+          axios.get('https://api.localfalcon.com/v1/campaigns', {
+            params: { api_key: LOCAL_FALCON_API_KEY },
+            timeout: 15000,
+          }),
+          axios.get('https://api.localfalcon.com/v1/reports', {
+            params: { api_key: LOCAL_FALCON_API_KEY },
+            timeout: 15000,
+          }),
+          axios.get('https://api.localfalcon.com/v1/locations', {
+            params: { api_key: LOCAL_FALCON_API_KEY },
+            timeout: 15000,
+          }),
+        ])
+        localFalcon = {
+          campaignsTotal: campaigns.data?.data?.total ?? campaigns.data?.total ?? null,
+          reportsTotal: reports.data?.data?.total ?? reports.data?.total ?? null,
+          locationsTotal: locations.data?.data?.total ?? locations.data?.total ?? null,
+          sampleReports: (reports.data?.data?.reports || reports.data?.reports || []).slice?.(0, 3) || [],
+        }
+      } catch (e) {
+        softDegraded.push('Local Falcon')
+      }
+    }
+
     const payload = buildLocalSeoOverview({
       domain,
       market,
@@ -3498,6 +3617,7 @@ app.get('/api/local-seo/overview', async (req, res) => {
         rankingLocalFeatures: signals.rankingLocalFeatures,
         lastFetchedAt: kwSnap?.fetchedAt || null,
         softDegraded,
+        localFalcon,
       },
     })
     res.json(payload)
@@ -3513,7 +3633,8 @@ app.get('/api/local-seo/overview', async (req, res) => {
 })
 
 app.get('/api/geo-ai/overview', async (req, res) => {
-  const domain = String((req.query as any).domain || 'maximo-seo.ai').replace(/^https?:\/\//, '').replace(/\/$/, '')
+  const domain = String((req.query as any).domain || '').replace(/^https?:\/\//, '').replace(/\/$/, '')
+  if (!domain) return res.status(400).json({ error: 'domain required' })
   const market = (req.query as any).market || null
   try {
     const kwSnap = await loadSnapshotPayload(domain, 'keywords_agg')
@@ -3522,6 +3643,30 @@ app.get('/api/geo-ai/overview', async (req, res) => {
     const softDegraded = [
       ...(Array.isArray(kwSnap?.data?.softDegraded) ? kwSnap!.data.softDegraded : []),
     ]
+
+    let morningscore: any = null
+    if (MORNINGSCORE_API_KEY) {
+      try {
+        const resolved = await morningscoreResolveDomainId(domain)
+        if (resolved) {
+          const detail = await morningscoreGet(`/v1/domains/${resolved.id}`, 20000)
+          const history = await morningscoreGet(`/v1/${resolved.id}/morningscore-history`, 20000)
+          morningscore = {
+            domain: resolved.domain,
+            score: detail?.score ?? null,
+            keywords: detail?.keywords ?? null,
+            traffic: detail?.traffic ?? null,
+            historyHasData: Boolean(history?.has_data),
+            historyPoints: Array.isArray(history?.data) ? history.data.slice(-6) : [],
+          }
+        } else {
+          morningscore = { available: false, reason: 'domain_not_in_morningscore_account' }
+        }
+      } catch {
+        softDegraded.push('Morningscore')
+      }
+    }
+
     const payload = buildGeoAiOverview({
       domain,
       market,
@@ -3531,6 +3676,7 @@ app.get('/api/geo-ai/overview', async (req, res) => {
         lastFetchedAt: kwSnap?.fetchedAt || null,
         softDegraded,
         topKeywords: signals.topKeywords,
+        morningscore,
       },
     })
     res.json(payload)
