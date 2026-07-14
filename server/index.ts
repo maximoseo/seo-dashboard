@@ -637,25 +637,160 @@ async function loadSnapshotPayload(domain: string, provider: string): Promise<{ 
   return { data: data.data, fetchedAt: data.fetched_at || null }
 }
 
-async function persistSnapshot(domain: string, provider: string, payload: unknown): Promise<void> {
-  if (!supabaseAdmin || !payload || typeof payload !== 'object') return
-  // Do not persist soft-degraded empty provider errors
-  if ((payload as any).ok === false && (payload as any).state === 'unavailable') return
+async function persistSnapshot(
+  domain: string,
+  provider: string,
+  payload: unknown,
+): Promise<{ ok: boolean; skipped?: boolean; error?: string }> {
+  if (!supabaseAdmin || !payload || typeof payload !== 'object') {
+    return { ok: false, skipped: true, error: 'no-admin-or-payload' }
+  }
+  // Do not persist hard-unavailable empty provider errors
+  if ((payload as any).ok === false && (payload as any).state === 'unavailable') {
+    return { ok: false, skipped: true, error: 'unavailable-payload' }
+  }
+  // Soft-degraded SE Ranking shells (no useful metrics) — skip durable write
+  if ((payload as any).softDegraded === true && (payload as any).data == null) {
+    return { ok: false, skipped: true, error: 'soft-degraded-empty' }
+  }
   const domainId = await findDomainId(domain)
-  if (!domainId) return
+  if (!domainId) return { ok: false, skipped: true, error: 'domain-not-found' }
   const today = new Date().toISOString().slice(0, 10)
-  await supabaseAdmin.from('seo_snapshots').upsert(
+  // PostgREST/jsonb rejects U+0000 (code 22P05). Exa/html fragments sometimes include them.
+  const cleanPayload = sanitizeJsonForPg(payload)
+  const { error } = await supabaseAdmin.from('seo_snapshots').upsert(
     {
       domain_id: domainId,
       provider,
       snapshot_date: today,
-      data: payload,
+      data: cleanPayload,
       fetched_at: new Date().toISOString(),
     },
     { onConflict: 'domain_id,provider,snapshot_date' },
-  ).then(({ error }) => {
-    if (error) console.error('[persistSnapshot]', provider, domain, error.message)
-  })
+  )
+  if (error) {
+    console.error('[persistSnapshot]', provider, domain, error.message)
+    return { ok: false, error: error.message }
+  }
+  return { ok: true }
+}
+
+/**
+ * Live multi-source overview hydrate + durable seo_snapshots write.
+ * Used by GET /api/overview (force) and POST /api/sync / nightly cron.
+ */
+async function hydrateDomainOverview(
+  domain: string,
+  pack: ReturnType<typeof resolveMarket>,
+): Promise<Record<string, any>> {
+  const today = new Date().toISOString().split('T')[0]
+  const result: Record<string, any> = {
+    domain,
+    market: pack,
+    sources: {},
+    activeSources: [] as string[],
+    softDegraded: [] as string[],
+    dataState: 'live',
+    fetchedAt: new Date().toISOString(),
+  }
+
+  const calls = await Promise.allSettled([
+    axios.get('https://api.ahrefs.com/v3/site-explorer/domain-rating', {
+      params: { target: domain, date: today }, headers: { Authorization: `Bearer ${AHREFS_API_KEY}` }, timeout: 10000,
+    }),
+    axios.get('https://api.ahrefs.com/v3/site-explorer/metrics', {
+      params: { target: domain, date: today, mode: 'subdomains' }, headers: { Authorization: `Bearer ${AHREFS_API_KEY}` }, timeout: 10000,
+    }),
+    axios.get('https://api.semrush.com/', {
+      params: { type: 'domain_ranks', key: SEMRUSH_API_KEY, domain, database: pack.semrushDatabase, export_columns: 'Dn,Rk,Or,Ot,Oc,Ad,At,Ac' }, timeout: 10000,
+    }),
+    axios.post('https://api.dataforseo.com/v3/backlinks/domain_pages_summary/live',
+      [{ target: domain, include_subdomains: true }],
+      { headers: { Authorization: `Basic ${DATAFORSEO_AUTH}`, 'Content-Type': 'application/json' }, timeout: 10000 }),
+    SE_RANKING_API ? serankingSafeGet(domain, 'overview', undefined, pack) : Promise.reject('No API key'),
+    EXA_API_KEY ? axios.post('https://api.exa.ai/findSimilar', {
+      url: `https://${domain}`, numResults: 5,
+      contents: { text: { maxCharacters: 200 } },
+    }, { headers: { 'x-api-key': EXA_API_KEY, 'Content-Type': 'application/json' }, timeout: 10000 }) : Promise.reject('No API key'),
+    SERPSTAT_API_KEY
+      ? serpstatRpc('SerpstatDomainProcedure.getDomainsInfo', { domains: [domain], se: pack.serpstatSe })
+      : Promise.reject('No API key'),
+    LOCAL_FALCON_API_KEY ? localFalconMeta() : Promise.reject('No API key'),
+    SERPAPI_KEY
+      ? axios.get('https://serpapi.com/account.json', { params: { api_key: SERPAPI_KEY }, timeout: 10000 })
+      : Promise.reject('No API key'),
+  ])
+
+  const [ahrefsDR, ahrefsMetrics, semrush, dataforseo, seranking, exa, serpstat, localFalcon, serpapiAccount] = calls
+
+  if (ahrefsDR.status === 'fulfilled') {
+    result.sources.ahrefs = { domainRating: ahrefsDR.value.data }
+    if (ahrefsMetrics.status === 'fulfilled') result.sources.ahrefs.metrics = ahrefsMetrics.value.data
+    result.activeSources.push('Ahrefs')
+  }
+  if (semrush.status === 'fulfilled') {
+    const rows = parseSemrushCSV(semrush.value.data)
+    if (rows[0]) { result.sources.semrush = rows[0]; result.activeSources.push('SEMrush') }
+  }
+  if (dataforseo.status === 'fulfilled') {
+    result.sources.dataforseo = dataforseo.value.data?.tasks?.[0]?.result?.[0]
+    if (result.sources.dataforseo) result.activeSources.push('DataForSEO')
+  }
+  if (seranking.status === 'fulfilled') {
+    const ser = seranking.value as any
+    if (ser?.softDegraded || ser?.state === 'soft_degraded') {
+      result.sources.seranking = ser
+      result.softDegraded.push('SE Ranking')
+    } else if (ser?.ok === false) {
+      result.sources.seranking = ser
+      result.softDegraded.push('SE Ranking')
+    } else {
+      result.sources.seranking = ser?.data ?? ser
+      result.activeSources.push('SE Ranking')
+    }
+  }
+  if (exa.status === 'fulfilled') {
+    result.sources.exa = { similarSites: exa.value.data?.results?.slice(0, 5) }
+    result.activeSources.push('Exa')
+  }
+  if (serpstat.status === 'fulfilled') {
+    result.sources.serpstat = serpstat.value
+    result.activeSources.push('Serpstat')
+  } else if (SERPSTAT_API_KEY) {
+    result.softDegraded.push('Serpstat')
+  }
+  if (localFalcon.status === 'fulfilled') {
+    result.sources.localFalcon = localFalcon.value
+    result.activeSources.push('Local Falcon')
+  } else if (LOCAL_FALCON_API_KEY) {
+    result.softDegraded.push('Local Falcon')
+  }
+  if (serpapiAccount.status === 'fulfilled') {
+    result.sources.serpapi = {
+      plan: serpapiAccount.value.data?.plan_name,
+      searchesLeft: serpapiAccount.value.data?.total_searches_left ?? serpapiAccount.value.data?.searches_remaining,
+    }
+    result.activeSources.push('SerpAPI')
+  } else if (SERPAPI_KEY) {
+    result.softDegraded.push('SerpAPI')
+  }
+  if (KEYWORDS_EVERYWHERE_API_KEY) result.sources.keywordsEverywhere = { configured: true }
+  if (MANGOOLS_API_KEY) result.sources.mangools = { configured: true, note: 'Key present; public REST surface incomplete — kept soft' }
+
+  result.writes = [] as Array<{ provider: string; ok: boolean; skipped?: boolean; error?: string }>
+  if (result.activeSources.length) {
+    result.writes.push({ provider: 'overview', ...(await persistSnapshot(domain, 'overview', result)) })
+    if (result.sources.ahrefs) {
+      result.writes.push({ provider: 'ahrefs', ...(await persistSnapshot(domain, 'ahrefs', result.sources.ahrefs)) })
+    }
+    if (result.sources.semrush) {
+      result.writes.push({ provider: 'semrush', ...(await persistSnapshot(domain, 'semrush', result.sources.semrush)) })
+    }
+    if (result.sources.dataforseo) {
+      result.writes.push({ provider: 'dataforseo', ...(await persistSnapshot(domain, 'dataforseo', result.sources.dataforseo)) })
+    }
+  }
+  return result
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -738,15 +873,46 @@ app.get('/api/ahrefs/backlinks-stats', expensiveLimiter, budgetMiddleware('ahref
 // ═══════════════════════════════════════════════════════════════════════════════
 
 function parseSemrushCSV(csv: string): Record<string, string>[] {
-  const lines = csv.split('\n').filter(Boolean)
+  // SEMrush CSV is semicolon-delimited and often CRLF; strip \r so keys stay clean.
+  const lines = String(csv || '')
+    .replace(/\r\n/g, '\n')
+    .replace(/\r/g, '\n')
+    .split('\n')
+    .map((l) => l.trim())
+    .filter(Boolean)
   if (lines.length < 2) return []
-  const headers = lines[0].split(';')
+  const headers = lines[0].split(';').map((h) => h.trim())
   return lines.slice(1).map(line => {
     const values = line.split(';')
     const obj: Record<string, string> = {}
-    headers.forEach((h, i) => { obj[h] = values[i] })
+    headers.forEach((h, i) => {
+      if (!h) return
+      obj[h] = values[i] != null ? String(values[i]).trim() : ''
+    })
     return obj
   })
+}
+
+/** Strip NUL / control bytes that PostgREST rejects for jsonb text (`22P05`). */
+function sanitizeJsonForPg(value: unknown, depth = 0): unknown {
+  if (depth > 40) return null
+  if (value == null) return value
+  if (typeof value === 'string') {
+    // drop U+0000 and other non-printable C0 controls except tab/newline
+    return value.replace(/\u0000/g, '').replace(/[\u0001-\u0008\u000B\u000C\u000E-\u001F]/g, '')
+  }
+  if (typeof value === 'number' || typeof value === 'boolean') return value
+  if (Array.isArray(value)) return value.map((v) => sanitizeJsonForPg(v, depth + 1))
+  if (typeof value === 'object') {
+    const out: Record<string, unknown> = {}
+    for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+      const key = String(k).replace(/\u0000/g, '').replace(/[\r\n]+/g, ' ').trim()
+      if (!key) continue
+      out[key] = sanitizeJsonForPg(v, depth + 1)
+    }
+    return out
+  }
+  return value
 }
 
 app.get('/api/semrush/domain-overview', expensiveLimiter, budgetMiddleware('semrush'), async (req, res) => {
@@ -1201,117 +1367,29 @@ app.get('/api/seranking/backlinks', expensiveLimiter, budgetMiddleware('serankin
 // Overview: combines ALL sources (market-aware + snapshot cache fallback)
 app.get('/api/overview', expensiveLimiter, async (req, res) => {
   const { domain, refresh } = req.query as Record<string, string>
+  if (!domain) return res.status(400).json({ error: 'domain required' })
   const pack = marketFromRequest(req, domain)
   const forceRefresh = refresh === '1' || refresh === 'true'
   if (!forceRefresh) {
     const cached = await loadSnapshotPayload(domain, 'overview')
     if (cached?.data && Object.keys(cached.data.sources || {}).length > 0) {
-      return res.json({ ...cached.data, domain, market: pack, dataState: 'cached', fetchedAt: cached.fetchedAt, fromSnapshot: true })
+      return res.json({
+        ...cached.data,
+        domain,
+        market: pack,
+        dataState: 'cached',
+        fetchedAt: cached.fetchedAt,
+        fromSnapshot: true,
+      })
     }
   }
 
-  const today = new Date().toISOString().split('T')[0]
-  const result: Record<string, any> = {
-    domain,
-    market: pack,
-    sources: {},
-    activeSources: [] as string[],
-    softDegraded: [] as string[],
-    dataState: 'live',
-    fetchedAt: new Date().toISOString(),
+  try {
+    const result = await hydrateDomainOverview(domain, pack)
+    res.json(result)
+  } catch (e: any) {
+    res.status(502).json({ error: e?.message || String(e), domain })
   }
-
-  const calls = await Promise.allSettled([
-    axios.get('https://api.ahrefs.com/v3/site-explorer/domain-rating', {
-      params: { target: domain, date: today }, headers: { Authorization: `Bearer ${AHREFS_API_KEY}` }, timeout: 10000,
-    }),
-    axios.get('https://api.ahrefs.com/v3/site-explorer/metrics', {
-      params: { target: domain, date: today, mode: 'subdomains' }, headers: { Authorization: `Bearer ${AHREFS_API_KEY}` }, timeout: 10000,
-    }),
-    axios.get('https://api.semrush.com/', {
-      params: { type: 'domain_ranks', key: SEMRUSH_API_KEY, domain, database: pack.semrushDatabase, export_columns: 'Dn,Rk,Or,Ot,Oc,Ad,At,Ac' }, timeout: 10000,
-    }),
-    axios.post('https://api.dataforseo.com/v3/backlinks/domain_pages_summary/live',
-      [{ target: domain, include_subdomains: true }],
-      { headers: { Authorization: `Basic ${DATAFORSEO_AUTH}`, 'Content-Type': 'application/json' }, timeout: 10000 }),
-    SE_RANKING_API ? serankingSafeGet(domain, 'overview', undefined, pack) : Promise.reject('No API key'),
-    EXA_API_KEY ? axios.post('https://api.exa.ai/findSimilar', {
-      url: `https://${domain}`, numResults: 5,
-      contents: { text: { maxCharacters: 200 } },
-    }, { headers: { 'x-api-key': EXA_API_KEY, 'Content-Type': 'application/json' }, timeout: 10000 }) : Promise.reject('No API key'),
-    SERPSTAT_API_KEY
-      ? serpstatRpc('SerpstatDomainProcedure.getDomainsInfo', { domains: [domain], se: pack.serpstatSe })
-      : Promise.reject('No API key'),
-    LOCAL_FALCON_API_KEY ? localFalconMeta() : Promise.reject('No API key'),
-    SERPAPI_KEY
-      ? axios.get('https://serpapi.com/account.json', { params: { api_key: SERPAPI_KEY }, timeout: 10000 })
-      : Promise.reject('No API key'),
-  ])
-
-  const [ahrefsDR, ahrefsMetrics, semrush, dataforseo, seranking, exa, serpstat, localFalcon, serpapiAccount] = calls
-
-  if (ahrefsDR.status === 'fulfilled') {
-    result.sources.ahrefs = { domainRating: ahrefsDR.value.data }
-    if (ahrefsMetrics.status === 'fulfilled') result.sources.ahrefs.metrics = ahrefsMetrics.value.data
-    result.activeSources.push('Ahrefs')
-  }
-  if (semrush.status === 'fulfilled') {
-    const rows = parseSemrushCSV(semrush.value.data)
-    if (rows[0]) { result.sources.semrush = rows[0]; result.activeSources.push('SEMrush') }
-  }
-  if (dataforseo.status === 'fulfilled') {
-    result.sources.dataforseo = dataforseo.value.data?.tasks?.[0]?.result?.[0]
-    if (result.sources.dataforseo) result.activeSources.push('DataForSEO')
-  }
-  if (seranking.status === 'fulfilled') {
-    const ser = seranking.value as any
-    if (ser?.softDegraded || ser?.state === 'soft_degraded') {
-      result.sources.seranking = ser
-      result.softDegraded.push('SE Ranking')
-    } else if (ser?.ok === false) {
-      result.sources.seranking = ser
-      result.softDegraded.push('SE Ranking')
-    } else {
-      result.sources.seranking = ser?.data ?? ser
-      result.activeSources.push('SE Ranking')
-    }
-  }
-  if (exa.status === 'fulfilled') {
-    result.sources.exa = { similarSites: exa.value.data?.results?.slice(0, 5) }
-    result.activeSources.push('Exa')
-  }
-  if (serpstat.status === 'fulfilled') {
-    result.sources.serpstat = serpstat.value
-    result.activeSources.push('Serpstat')
-  } else if (SERPSTAT_API_KEY) {
-    result.softDegraded.push('Serpstat')
-  }
-  if (localFalcon.status === 'fulfilled') {
-    result.sources.localFalcon = localFalcon.value
-    result.activeSources.push('Local Falcon')
-  } else if (LOCAL_FALCON_API_KEY) {
-    result.softDegraded.push('Local Falcon')
-  }
-  if (serpapiAccount.status === 'fulfilled') {
-    result.sources.serpapi = {
-      plan: serpapiAccount.value.data?.plan_name,
-      searchesLeft: serpapiAccount.value.data?.total_searches_left ?? serpapiAccount.value.data?.searches_remaining,
-    }
-    result.activeSources.push('SerpAPI')
-  } else if (SERPAPI_KEY) {
-    result.softDegraded.push('SerpAPI')
-  }
-  if (KEYWORDS_EVERYWHERE_API_KEY) result.sources.keywordsEverywhere = { configured: true }
-  if (MANGOOLS_API_KEY) result.sources.mangools = { configured: true, note: 'Key present; public REST surface incomplete — kept soft' }
-
-  if (result.activeSources.length) {
-    void persistSnapshot(domain, 'overview', result)
-    if (result.sources.ahrefs) void persistSnapshot(domain, 'ahrefs', result.sources.ahrefs)
-    if (result.sources.semrush) void persistSnapshot(domain, 'semrush', result.sources.semrush)
-    if (result.sources.dataforseo) void persistSnapshot(domain, 'dataforseo', result.sources.dataforseo)
-  }
-
-  res.json(result)
 })
 
 // Aggregated keywords from multiple sources
@@ -1412,14 +1490,18 @@ app.get('/api/keywords/aggregated', expensiveLimiter, async (req, res) => {
   res.json(result)
 })
 
-// Aggregated backlinks from multiple sources
+// Aggregated backlinks from multiple sources (Ahrefs + SEMrush + DataForSEO + SE Ranking + Serpstat)
 app.get('/api/backlinks/aggregated', expensiveLimiter, async (req, res) => {
-  const { domain, refresh } = req.query as Record<string, string>
+  const { domain, refresh, limit } = req.query as Record<string, string>
+  if (!domain?.trim()) return res.status(400).json({ error: 'domain required' })
   const pack = marketFromRequest(req, domain)
   const forceRefresh = refresh === '1' || refresh === 'true'
+  const rowLimit = Math.min(Math.max(Number(limit) || 50, 10), 200)
+  const today = new Date().toISOString().slice(0, 10)
+
   if (!forceRefresh) {
     const cached = await loadSnapshotPayload(domain, 'backlinks_agg')
-    if (cached?.data && Object.keys(cached.data.sources || {}).length > 0) {
+    if (cached?.data && (Array.isArray(cached.data.normalized) ? cached.data.normalized.length > 0 : Object.keys(cached.data.sources || {}).length > 0)) {
       return res.json({ ...cached.data, domain, market: pack, dataState: 'cached', fetchedAt: cached.fetchedAt, fromSnapshot: true })
     }
   }
@@ -1430,20 +1512,88 @@ app.get('/api/backlinks/aggregated', expensiveLimiter, async (req, res) => {
     sources: {},
     activeSources: [] as string[],
     softDegraded: [] as string[],
+    normalized: [] as any[],
+    summary: { total: 0, dofollow: 0, nofollow: 0, refDomains: null as number | null },
     dataState: 'live',
     fetchedAt: new Date().toISOString(),
   }
 
+  const ahrefsHeaders = { Authorization: `Bearer ${AHREFS_API_KEY}` }
   const calls = await Promise.allSettled([
-    axios.get('https://api.ahrefs.com/v3/site-explorer/backlinks-stats', {
-      params: { target: domain, mode: 'subdomains' }, headers: { Authorization: `Bearer ${AHREFS_API_KEY}` }, timeout: 10000,
-    }),
-    axios.get('https://api.ahrefs.com/v3/site-explorer/refdomains', {
-      params: { target: domain, mode: 'subdomains', limit: 20 }, headers: { Authorization: `Bearer ${AHREFS_API_KEY}` }, timeout: 10000,
-    }),
+    // Ahrefs v3 requires `date` for backlinks-stats
+    AHREFS_API_KEY
+      ? axios.get('https://api.ahrefs.com/v3/site-explorer/backlinks-stats', {
+          params: { target: domain, mode: 'subdomains', date: today },
+          headers: ahrefsHeaders,
+          timeout: 15000,
+        })
+      : Promise.reject('No Ahrefs key'),
+    // Ahrefs v3 requires `select` for refdomains
+    AHREFS_API_KEY
+      ? axios.get('https://api.ahrefs.com/v3/site-explorer/refdomains', {
+          params: {
+            target: domain,
+            mode: 'subdomains',
+            limit: Math.min(rowLimit, 100),
+            select: 'domain,domain_rating,dofollow_links,backlinks,first_seen,last_seen',
+          },
+          headers: ahrefsHeaders,
+          timeout: 15000,
+        })
+      : Promise.reject('No Ahrefs key'),
+    // Live backlink rows for table (best effort)
+    AHREFS_API_KEY
+      ? axios.get('https://api.ahrefs.com/v3/site-explorer/all-backlinks', {
+          params: {
+            target: domain,
+            mode: 'subdomains',
+            limit: rowLimit,
+            select: 'url_from,url_to,anchor,domain_rating_source,is_dofollow,first_seen,title',
+          },
+          headers: ahrefsHeaders,
+          timeout: 20000,
+        })
+      : Promise.reject('No Ahrefs key'),
+    // SEMrush Analytics API — overview + sample backlinks + refdomains
+    SEMRUSH_API_KEY
+      ? axios.get('https://api.semrush.com/analytics/v1/', {
+          params: {
+            type: 'backlinks_overview',
+            key: SEMRUSH_API_KEY,
+            target: domain,
+            target_type: 'root_domain',
+          },
+          timeout: 15000,
+        })
+      : Promise.reject('No SEMrush key'),
+    SEMRUSH_API_KEY
+      ? axios.get('https://api.semrush.com/analytics/v1/', {
+          params: {
+            type: 'backlinks',
+            key: SEMRUSH_API_KEY,
+            target: domain,
+            target_type: 'root_domain',
+            display_limit: rowLimit,
+            export_columns: 'source_url,source_title,target_url,anchor,external_num,internal_num,first_seen,last_seen,page_ascore,domain_ascore',
+          },
+          timeout: 20000,
+        })
+      : Promise.reject('No SEMrush key'),
+    SEMRUSH_API_KEY
+      ? axios.get('https://api.semrush.com/analytics/v1/', {
+          params: {
+            type: 'backlinks_refdomains',
+            key: SEMRUSH_API_KEY,
+            target: domain,
+            target_type: 'root_domain',
+            display_limit: Math.min(rowLimit, 100),
+          },
+          timeout: 15000,
+        })
+      : Promise.reject('No SEMrush key'),
     axios.post('https://api.dataforseo.com/v3/backlinks/domain_pages_summary/live',
       [{ target: domain, include_subdomains: true }],
-      { headers: { Authorization: `Basic ${DATAFORSEO_AUTH}`, 'Content-Type': 'application/json' }, timeout: 10000 }),
+      { headers: { Authorization: `Basic ${DATAFORSEO_AUTH}`, 'Content-Type': 'application/json' }, timeout: 15000 }),
     SE_RANKING_API
       ? axios.get('https://api4.seranking.com/backlinks/info/', {
           params: { domain }, headers: { Authorization: `Token ${SE_RANKING_API}` }, timeout: 10000, validateStatus: (s) => s < 500,
@@ -1460,16 +1610,113 @@ app.get('/api/backlinks/aggregated', expensiveLimiter, async (req, res) => {
       : Promise.reject('No API key'),
   ])
 
-  const [ahrefsStats, ahrefsRD, dataforseo, seranking, serpstat] = calls
-  if (ahrefsStats.status === 'fulfilled') {
-    result.sources.ahrefs = { stats: ahrefsStats.value.data ?? ahrefsStats.value }
-    if (ahrefsRD.status === 'fulfilled') result.sources.ahrefs.refdomains = ahrefsRD.value.data
-    result.activeSources.push('Ahrefs')
+  const [ahrefsStats, ahrefsRD, ahrefsRows, semrushOverview, semrushRows, semrushRD, dataforseo, seranking, serpstat] = calls
+
+  // ---- Ahrefs ----
+  if (ahrefsStats.status === 'fulfilled' || ahrefsRD.status === 'fulfilled' || ahrefsRows.status === 'fulfilled') {
+    result.sources.ahrefs = {}
+    if (ahrefsStats.status === 'fulfilled') {
+      result.sources.ahrefs.stats = ahrefsStats.value.data ?? ahrefsStats.value
+      const metrics = result.sources.ahrefs.stats?.metrics || result.sources.ahrefs.stats
+      if (metrics?.live_refdomains != null) result.summary.refDomains = Number(metrics.live_refdomains) || result.summary.refDomains
+      if (metrics?.live != null) result.summary.total = Math.max(result.summary.total, Number(metrics.live) || 0)
+    } else if (AHREFS_API_KEY) {
+      result.softDegraded.push('Ahrefs(stats)')
+    }
+    if (ahrefsRD.status === 'fulfilled') {
+      result.sources.ahrefs.refdomains = ahrefsRD.value.data ?? ahrefsRD.value
+    } else if (AHREFS_API_KEY) {
+      result.softDegraded.push('Ahrefs(refdomains)')
+    }
+    if (ahrefsRows.status === 'fulfilled') {
+      result.sources.ahrefs.backlinks = ahrefsRows.value.data ?? ahrefsRows.value
+      const rows = Array.isArray(result.sources.ahrefs.backlinks?.backlinks)
+        ? result.sources.ahrefs.backlinks.backlinks
+        : Array.isArray(result.sources.ahrefs.backlinks)
+          ? result.sources.ahrefs.backlinks
+          : []
+      for (const b of rows) {
+        result.normalized.push({
+          url_from: b.url_from || b.source_url || '',
+          domain_from: (() => {
+            try { return new URL(String(b.url_from || '')).hostname.replace(/^www\./, '') } catch { return b.domain_from || '' }
+          })(),
+          url_to: b.url_to || b.target_url || '',
+          rank: Number(b.domain_rating_source ?? b.domain_rating ?? b.ascore ?? 0) || 0,
+          dofollow: b.is_dofollow !== false && b.dofollow !== false,
+          anchor: b.anchor || b.title || '',
+          first_seen: b.first_seen || '',
+          source: 'ahrefs',
+        })
+      }
+    } else if (AHREFS_API_KEY) {
+      result.softDegraded.push('Ahrefs(rows)')
+    }
+    if (!result.activeSources.includes('Ahrefs')) result.activeSources.push('Ahrefs')
+  } else if (AHREFS_API_KEY) {
+    result.softDegraded.push('Ahrefs')
   }
+
+  // ---- SEMrush ----
+  if (semrushOverview.status === 'fulfilled' || semrushRows.status === 'fulfilled' || semrushRD.status === 'fulfilled') {
+    result.sources.semrush = {}
+    if (semrushOverview.status === 'fulfilled') {
+      const ovRows = parseSemrushCSV(semrushOverview.value.data)
+      result.sources.semrush.overview = ovRows[0] || ovRows
+      const ov = ovRows[0] || {}
+      const total = Number(ov.total ?? ov.Total ?? 0) || 0
+      const follows = Number(ov.follows_num ?? ov.Follows ?? 0) || 0
+      const nofollows = Number(ov.nofollows_num ?? ov.Nofollows ?? 0) || 0
+      const domainsNum = Number(ov.domains_num ?? ov.Domains ?? 0) || 0
+      if (total) result.summary.total = Math.max(result.summary.total, total)
+      if (follows) result.summary.dofollow = Math.max(result.summary.dofollow, follows)
+      if (nofollows) result.summary.nofollow = Math.max(result.summary.nofollow, nofollows)
+      if (domainsNum) result.summary.refDomains = result.summary.refDomains ?? domainsNum
+    } else if (SEMRUSH_API_KEY) {
+      result.softDegraded.push('SEMrush(overview)')
+    }
+    if (semrushRD.status === 'fulfilled') {
+      result.sources.semrush.refdomains = parseSemrushCSV(semrushRD.value.data)
+    } else if (SEMRUSH_API_KEY) {
+      result.softDegraded.push('SEMrush(refdomains)')
+    }
+    if (semrushRows.status === 'fulfilled') {
+      const rows = parseSemrushCSV(semrushRows.value.data)
+      result.sources.semrush.backlinks = rows
+      for (const b of rows) {
+        const sourceUrl = String(b.source_url || b.sourceurl || b.url_from || '')
+        let domainFrom = String(b.source_domain || b.domain_from || '')
+        if (!domainFrom && sourceUrl) {
+          try { domainFrom = new URL(sourceUrl).hostname.replace(/^www\./, '') } catch { /* ignore */ }
+        }
+        result.normalized.push({
+          url_from: sourceUrl,
+          domain_from: domainFrom,
+          url_to: b.target_url || b.url_to || '',
+          rank: Number(b.domain_ascore ?? b.page_ascore ?? b.ascore ?? 0) || 0,
+          dofollow: !String(b.form || b.nofollow || '').toLowerCase().includes('true'),
+          anchor: b.anchor || b.source_title || '',
+          first_seen: b.first_seen || '',
+          source: 'semrush',
+        })
+      }
+    } else if (SEMRUSH_API_KEY) {
+      result.softDegraded.push('SEMrush(rows)')
+    }
+    if (!result.activeSources.includes('SEMrush')) result.activeSources.push('SEMrush')
+  } else if (SEMRUSH_API_KEY) {
+    result.softDegraded.push('SEMrush')
+  }
+
+  // ---- DataForSEO ----
   if (dataforseo.status === 'fulfilled') {
     result.sources.dataforseo = dataforseo.value.data?.tasks?.[0]?.result?.[0]
     if (result.sources.dataforseo) result.activeSources.push('DataForSEO')
+  } else if (DATAFORSEO_AUTH) {
+    result.softDegraded.push('DataForSEO')
   }
+
+  // ---- SE Ranking ----
   if (seranking.status === 'fulfilled') {
     const ser = seranking.value as any
     if (ser?.softDegraded || ser?.state === 'soft_degraded') {
@@ -1482,15 +1729,42 @@ app.get('/api/backlinks/aggregated', expensiveLimiter, async (req, res) => {
   } else if (SE_RANKING_API) {
     result.softDegraded.push('SE Ranking')
   }
+
+  // ---- Serpstat ----
   if (serpstat.status === 'fulfilled') {
     result.sources.serpstat = serpstat.value
-    result.normalized = backlinksFromSerpstat(serpstat.value)
-    result.activeSources.push('Serpstat')
+    const serpstatNorm = backlinksFromSerpstat(serpstat.value)
+    // keep summary stats from serpstat when available
+    if (serpstatNorm && typeof serpstatNorm === 'object' && !Array.isArray(serpstatNorm)) {
+      result.sources.serpstat_summary = serpstatNorm
+    }
+    if (!result.activeSources.includes('Serpstat')) result.activeSources.push('Serpstat')
   } else if (SERPSTAT_API_KEY) {
     result.softDegraded.push('Serpstat')
   }
 
-  if (result.activeSources.length) void persistSnapshot(domain, 'backlinks_agg', result)
+  // Deduplicate normalized rows by source url + anchor
+  if (Array.isArray(result.normalized) && result.normalized.length) {
+    const seen = new Set<string>()
+    const deduped: any[] = []
+    for (const row of result.normalized) {
+      const key = `${(row.url_from || '').toLowerCase()}|${(row.anchor || '').toLowerCase()}`
+      if (seen.has(key)) continue
+      seen.add(key)
+      deduped.push(row)
+    }
+    result.normalized = deduped
+    const fromRowsTotal = deduped.length
+    const fromRowsFollow = deduped.filter((r) => r.dofollow).length
+    const fromRowsNoFollow = fromRowsTotal - fromRowsFollow
+    // Prefer provider summary totals when present; never invent. Fall back to row counts.
+    if (!result.summary.total) result.summary.total = fromRowsTotal
+    if (!result.summary.dofollow) result.summary.dofollow = fromRowsFollow
+    if (!result.summary.nofollow) result.summary.nofollow = fromRowsNoFollow
+  }
+
+  if (!result.normalized.length && !result.activeSources.length) result.dataState = 'unavailable'
+  if (result.activeSources.length || result.normalized.length) void persistSnapshot(domain, 'backlinks_agg', result)
   res.json(result)
 })
 
@@ -2377,10 +2651,12 @@ async function sendDigestEmail(subject: string, text: string): Promise<{ ok: boo
   }
 }
 
-async function runNightlySync(opts: { limit?: number; createTasks?: boolean; sendDigest?: boolean }) {
+async function runNightlySync(opts: { limit?: number; createTasks?: boolean; sendDigest?: boolean; refresh?: boolean }) {
   if (!supabaseAdmin) throw new Error('SUPABASE_SERVICE_ROLE not configured')
   const limit = Math.min(Math.max(Number(opts.limit || 20), 1), 50)
   const createTasks = opts.createTasks !== false
+  // Default true: nightly must refresh live metrics into seo_snapshots before deriving alerts.
+  const refresh = opts.refresh !== false
   const { data: domains, error } = await supabaseAdmin
     .from('seo_domains')
     .select('id, domain, name, status')
@@ -2394,6 +2670,17 @@ async function runNightlySync(opts: { limit?: number; createTasks?: boolean; sen
   let alertsTotal = 0
   let tasksTotal = 0
   for (const d of domains) {
+    let hydrate: Record<string, any> | null = null
+    let hydrateError: string | null = null
+    if (refresh) {
+      try {
+        const pack = resolveMarket({ domain: d.domain })
+        hydrate = await hydrateDomainOverview(d.domain, pack)
+      } catch (e: any) {
+        hydrateError = e?.message || String(e)
+        console.error('[nightly-sync] hydrate failed', d.domain, hydrateError)
+      }
+    }
     const snaps = await loadLatestSnapshots(supabaseAdmin, [d.id], 20)
     const alerts = alertsFromSnapshotRows(d.domain, snaps as any)
     const persisted = await persistAlertsAndTasks({
@@ -2405,7 +2692,20 @@ async function runNightlySync(opts: { limit?: number; createTasks?: boolean; sen
     })
     alertsTotal += persisted.alertsUpserted
     tasksTotal += persisted.tasksUpserted
-    results.push({ domain: d.domain, alertsGenerated: alerts.length, ...persisted })
+    results.push({
+      domain: d.domain,
+      alertsGenerated: alerts.length,
+      ...persisted,
+      hydrate: hydrate
+        ? {
+            activeSources: hydrate.activeSources || [],
+            softDegraded: hydrate.softDegraded || [],
+            writes: hydrate.writes || [],
+            fetchedAt: hydrate.fetchedAt,
+          }
+        : null,
+      hydrateError,
+    })
   }
 
   const { data: openTasks } = await supabaseAdmin
@@ -2688,8 +2988,17 @@ app.post('/api/sync', expensiveLimiter, async (req, res) => {
     return res.status(503).json({ error: 'SUPABASE_SERVICE_ROLE not configured — cannot persist spine writes' })
   }
 
-  const body = (req.body || {}) as { domain?: string; persist?: boolean; createTasks?: boolean; push?: boolean; limit?: number }
+  const body = (req.body || {}) as {
+    domain?: string
+    /** Default true — live-refresh provider metrics into seo_snapshots before alerts. */
+    persist?: boolean
+    createTasks?: boolean
+    push?: boolean
+    limit?: number
+  }
   const createTasks = body.createTasks !== false
+  // Default ON: previously /api/sync only re-derived alerts from stale snaps (no live fetch).
+  const refresh = body.persist !== false
   const push = body.push === true
   const domainFilter = body.domain ? String(body.domain).replace(/^https?:\/\//, '').replace(/\/$/, '') : null
   const limit = Math.min(Math.max(Number(body.limit || 20), 1), 50)
@@ -2714,6 +3023,19 @@ app.post('/api/sync', expensiveLimiter, async (req, res) => {
 
   const results: any[] = []
   for (const d of domains) {
+    let hydrate: Record<string, any> | null = null
+    let hydrateError: string | null = null
+    if (refresh) {
+      try {
+        const pack = resolveMarket({ domain: d.domain })
+        hydrate = await hydrateDomainOverview(d.domain, pack)
+      } catch (e: any) {
+        hydrateError = e?.message || String(e)
+        console.error('[api/sync] hydrate failed', d.domain, hydrateError)
+      }
+    }
+
+    // Re-read snaps AFTER live hydrate so alerts/tasks see fresh metrics.
     const snaps = await loadLatestSnapshots(supabaseAdmin, [d.id], 20)
     const alerts = alertsFromSnapshotRows(d.domain, snaps as any)
     const persisted = await persistAlertsAndTasks({
@@ -2752,12 +3074,18 @@ app.post('/api/sync', expensiveLimiter, async (req, res) => {
       alertsGenerated: alerts.length,
       ...persisted,
       bridges,
+      hydrated: !!hydrate,
+      hydrateError,
+      activeSources: hydrate?.activeSources || [],
+      softDegraded: hydrate?.softDegraded || [],
+      writes: hydrate?.writes || [],
     })
   }
 
   res.json({
     ok: true,
     synced: results.length,
+    refresh,
     results,
     fetchedAt: new Date().toISOString(),
   })
