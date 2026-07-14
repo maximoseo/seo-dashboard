@@ -1982,8 +1982,180 @@ app.get('/api/backlinks/aggregated', expensiveLimiter, async (req, res) => {
     if (!result.summary.nofollow) result.summary.nofollow = fromRowsNoFollow
   }
 
-  if (!result.normalized.length && !result.activeSources.length) result.dataState = 'unavailable'
-  if (result.activeSources.length || result.normalized.length) void persistSnapshot(domain, 'backlinks_agg', result)
+  // ---- Referring domains inventory (multi-source, normalized) ----
+  type RefDomainRow = {
+    domain: string
+    rank: number
+    backlinks: number
+    dofollow: number | null
+    first_seen: string
+    last_seen: string
+    source: string
+  }
+  const refByKey = new Map<string, RefDomainRow>()
+  const upsertRef = (raw: Partial<RefDomainRow> & { domain?: string }) => {
+    const domainName = String(raw.domain || '')
+      .replace(/^https?:\/\//, '')
+      .replace(/^www\./, '')
+      .replace(/\/.*$/, '')
+      .trim()
+      .toLowerCase()
+    if (!domainName) return
+    const key = `${domainName}|${String(raw.source || 'unknown').toLowerCase()}`
+    const prev = refByKey.get(key)
+    if (!prev) {
+      refByKey.set(key, {
+        domain: domainName,
+        rank: Number(raw.rank || 0) || 0,
+        backlinks: Number(raw.backlinks || 0) || 0,
+        dofollow: raw.dofollow == null ? null : Number(raw.dofollow) || 0,
+        first_seen: raw.first_seen || '',
+        last_seen: raw.last_seen || '',
+        source: String(raw.source || 'unknown').toLowerCase(),
+      })
+      return
+    }
+    prev.rank = Math.max(prev.rank, Number(raw.rank || 0) || 0)
+    prev.backlinks = Math.max(prev.backlinks, Number(raw.backlinks || 0) || 0)
+    if (raw.dofollow != null) prev.dofollow = Math.max(Number(prev.dofollow || 0), Number(raw.dofollow) || 0)
+    if (raw.first_seen && !prev.first_seen) prev.first_seen = raw.first_seen
+    if (raw.last_seen) prev.last_seen = raw.last_seen
+  }
+
+  // Ahrefs refdomains payload
+  {
+    const payload = result.sources?.ahrefs?.refdomains
+    const rows = Array.isArray(payload?.refdomains)
+      ? payload.refdomains
+      : Array.isArray(payload)
+        ? payload
+        : []
+    for (const r of rows) {
+      upsertRef({
+        domain: r.domain || r.referring_domain || r.host || '',
+        rank: Number(r.domain_rating ?? r.rank ?? r.dr ?? 0) || 0,
+        backlinks: Number(r.backlinks ?? r.links ?? r.dofollow_links ?? 0) || 0,
+        dofollow: r.dofollow_links != null ? Number(r.dofollow_links) || 0 : null,
+        first_seen: r.first_seen || '',
+        last_seen: r.last_seen || '',
+        source: 'ahrefs',
+      })
+    }
+  }
+
+  // SEMrush refdomains CSV-parsed rows
+  if (Array.isArray(result.sources?.semrush?.refdomains)) {
+    for (const r of result.sources.semrush.refdomains as any[]) {
+      upsertRef({
+        domain: r.domain || r.source_domain || r.Domain || r.ascore_domain || '',
+        rank: Number(r.domain_ascore ?? r.ascore ?? r.Domain_ascore ?? 0) || 0,
+        backlinks: Number(r.backlinks_num ?? r.backlinks ?? r.links_num ?? 0) || 0,
+        dofollow: r.forms_num != null ? Number(r.forms_num) || 0 : null,
+        first_seen: r.first_seen || '',
+        last_seen: r.last_seen || '',
+        source: 'semrush',
+      })
+    }
+  }
+
+  // Serpstat refdomains
+  {
+    const payload = result.sources?.serpstat?.refdomains
+    const rows =
+      payload?.result?.data ||
+      payload?.data ||
+      (Array.isArray(payload) ? payload : [])
+    if (Array.isArray(rows)) {
+      for (const r of rows) {
+        upsertRef({
+          domain: r.domain || r.referring_domain || r.domain_from || '',
+          rank: Number(r.domain_rank ?? r.domainRank ?? r.rank ?? 0) || 0,
+          backlinks: Number(r.links ?? r.backlinks ?? r.links_count ?? 0) || 0,
+          dofollow: r.nofollow === true ? 0 : (r.dofollow_links != null ? Number(r.dofollow_links) : null),
+          first_seen: r.first_seen || r.firstSeen || '',
+          last_seen: r.last_seen || r.lastSeen || '',
+          source: 'serpstat',
+        })
+      }
+    }
+  }
+
+  // DataForSEO referring domains (extra live call; best-effort)
+  if (DATAFORSEO_AUTH) {
+    try {
+      const rdRes = await axios.post(
+        'https://api.dataforseo.com/v3/backlinks/referring_domains/live',
+        [{ target: domain, limit: Math.min(rowLimit, 100), order_by: ['rank,desc'] }],
+        {
+          headers: { Authorization: `Basic ${DATAFORSEO_AUTH}`, 'Content-Type': 'application/json' },
+          timeout: 25000,
+        },
+      )
+      const items = rdRes.data?.tasks?.[0]?.result?.[0]?.items
+      result.sources.dataforseo = result.sources.dataforseo || {}
+      result.sources.dataforseo.refdomains = rdRes.data?.tasks?.[0]?.result?.[0] || rdRes.data
+      if (Array.isArray(items) && items.length) {
+        for (const r of items) {
+          upsertRef({
+            domain: r.domain || r.domain_from || r.referring_domain || '',
+            rank: Number(r.rank ?? r.domain_from_rank ?? 0) || 0,
+            backlinks: Number(r.backlinks ?? r.links_count ?? 0) || 0,
+            dofollow: r.backlinks_dofollow != null ? Number(r.backlinks_dofollow) || 0 : (r.dofollow === false ? 0 : null),
+            first_seen: r.first_seen || '',
+            last_seen: r.last_seen || '',
+            source: 'dataforseo',
+          })
+        }
+        if (!result.activeSources.includes('DataForSEO')) result.activeSources.push('DataForSEO')
+      }
+    } catch {
+      if (DATAFORSEO_AUTH) result.softDegraded.push('DataForSEO(refdomains)')
+    }
+  }
+
+  // Derive domains from normalized link rows when provider RD lists are empty
+  if (Array.isArray(result.normalized)) {
+    const derived = new Map<string, RefDomainRow>()
+    for (const row of result.normalized) {
+      const d = String(row.domain_from || '')
+        .replace(/^www\./, '')
+        .toLowerCase()
+      if (!d) continue
+      const key = `${d}|${String(row.source || 'unknown').toLowerCase()}`
+      const prev = derived.get(key)
+      if (!prev) {
+        derived.set(key, {
+          domain: d,
+          rank: Number(row.rank || 0) || 0,
+          backlinks: 1,
+          dofollow: row.dofollow ? 1 : 0,
+          first_seen: row.first_seen || '',
+          last_seen: '',
+          source: String(row.source || 'unknown').toLowerCase(),
+        })
+      } else {
+        prev.backlinks += 1
+        prev.rank = Math.max(prev.rank, Number(row.rank || 0) || 0)
+        if (row.dofollow) prev.dofollow = Number(prev.dofollow || 0) + 1
+        if (row.first_seen && !prev.first_seen) prev.first_seen = row.first_seen
+      }
+    }
+    // Only add derived rows for domains we don't already have from RD endpoints
+    for (const row of derived.values()) {
+      const hasProviderList = Array.from(refByKey.keys()).some((k) => k.startsWith(`${row.domain}|`))
+      if (!hasProviderList) upsertRef(row)
+    }
+  }
+
+  result.refdomains = Array.from(refByKey.values())
+    .sort((a, b) => (b.rank - a.rank) || (b.backlinks - a.backlinks) || a.domain.localeCompare(b.domain))
+  if (!result.summary.refDomains) {
+    const uniqueDomains = new Set(result.refdomains.map((r: RefDomainRow) => r.domain))
+    if (uniqueDomains.size) result.summary.refDomains = uniqueDomains.size
+  }
+
+  if (!result.normalized.length && !result.refdomains.length && !result.activeSources.length) result.dataState = 'unavailable'
+  if (result.activeSources.length || result.normalized.length || result.refdomains.length) void persistSnapshot(domain, 'backlinks_agg', result)
   res.json(result)
 })
 
@@ -2227,9 +2399,45 @@ app.get('/api/pages/aggregated', expensiveLimiter, async (req, res) => {
     if (kw.keyword && r.title === normalizeUrl(kw.url)) r.title = kw.keyword
   }
 
+  // Merge technical on-page signals from latest site-audit snapshot when available
+  try {
+    const audit = await loadSnapshotPayload(domain, 'site_audit_agg')
+    const auditPages = Array.isArray(audit?.data?.pages) ? audit.data.pages : []
+    if (auditPages.length) {
+      result.sources.onpage_from_site_audit = {
+        pages: auditPages.length,
+        fetchedAt: audit?.fetchedAt || null,
+      }
+      if (!result.activeSources.includes('On-Page audit')) result.activeSources.push('On-Page audit')
+      const byAuditUrl = new Map<string, any>()
+      for (const ap of auditPages) {
+        const key = normalizeUrl(ap.url || '')
+        if (key) byAuditUrl.set(key, ap)
+      }
+      for (const p of byUrl.values()) {
+        const ap = byAuditUrl.get(normalizeUrl(p.url))
+        if (!ap) continue
+        if (ap.status) p.status = Number(ap.status) || p.status
+        if (ap.title && (p.title === normalizeUrl(p.url) || !p.title)) p.title = ap.title
+        if (ap.wordCount) p.wordCount = Math.max(p.wordCount, Number(ap.wordCount) || 0)
+        if (ap.loadTime) p.loadTime = Math.max(p.loadTime, Number(ap.loadTime) || 0)
+        if (ap.onpageScore != null) p.score = Math.max(p.score, Math.round(Number(ap.onpageScore) || 0))
+        ;(p as any).description = ap.description || (p as any).description || ''
+        ;(p as any).h1 = ap.h1 || (p as any).h1 || ''
+        ;(p as any).onpageIssues = Array.isArray(ap.issues) ? ap.issues.slice(0, 8) : []
+        if (!(p as any).source?.includes('On-Page')) (p as any).source = `${p.source}+On-Page`
+      }
+    }
+  } catch {
+    // optional enrichment
+  }
+
   const normalized = Array.from(byUrl.values())
     .map((p) => ({
       ...p,
+      description: (p as any).description || '',
+      h1: (p as any).h1 || '',
+      onpageIssues: Array.isArray((p as any).onpageIssues) ? (p as any).onpageIssues : [],
       score: p.score || Math.min(99, 40 + Math.min(40, p.keywords) + Math.min(15, Math.round(p.traffic / 100)) + Math.min(10, Math.round(p.backlinks / 10))),
       lastCrawled: p.lastCrawled || result.fetchedAt.slice(0, 10),
     }))
@@ -2242,10 +2450,393 @@ app.get('/api/pages/aggregated', expensiveLimiter, async (req, res) => {
     redirects: normalized.filter((p) => p.status >= 300 && p.status < 400).length,
     errors: normalized.filter((p) => p.status >= 400).length,
     withTraffic: normalized.filter((p) => p.traffic > 0).length,
+    withOnpage: normalized.filter((p) => (p.wordCount > 0 || (p as any).h1 || (Array.isArray((p as any).onpageIssues) && (p as any).onpageIssues.length))).length,
   }
 
   if (result.activeSources.length || normalized.length) void persistSnapshot(domain, 'pages_agg', result)
   if (!normalized.length && !result.activeSources.length) result.dataState = 'unavailable'
+  res.json(result)
+})
+
+// Aggregated technical site audit — DataForSEO On-Page + PageSpeed SEO + backlink risk signals
+app.get('/api/site-audit/aggregated', expensiveLimiter, async (req, res) => {
+  const { domain, refresh, max_pages } = req.query as Record<string, string>
+  if (!domain?.trim()) return res.status(400).json({ error: 'domain required' })
+  const pack = marketFromRequest(req, domain)
+  const forceRefresh = refresh === '1' || refresh === 'true'
+  const crawlLimit = Math.min(Math.max(Number(max_pages) || 20, 5), 50)
+  const cleanDomain = String(domain).replace(/^https?:\/\//, '').replace(/\/$/, '').replace(/^www\./, '')
+  const targetUrl = `https://${cleanDomain}`
+
+  if (!forceRefresh) {
+    const cached = await loadSnapshotPayload(domain, 'site_audit_agg')
+    if (cached?.data && (Array.isArray(cached.data.issues) ? cached.data.issues.length > 0 : Object.keys(cached.data.sources || {}).length > 0)) {
+      return res.json({ ...cached.data, domain, market: pack, dataState: 'cached', fetchedAt: cached.fetchedAt, fromSnapshot: true })
+    }
+  }
+
+  const result: Record<string, any> = {
+    domain: cleanDomain,
+    market: pack,
+    sources: {},
+    activeSources: [] as string[],
+    softDegraded: [] as string[],
+    summary: {
+      pagesCrawled: 0,
+      issuesTotal: 0,
+      errors: 0,
+      warnings: 0,
+      notices: 0,
+      onpageScore: null as number | null,
+      lighthouseSeo: null as number | null,
+      performanceMobile: null as number | null,
+      brokenBacklinks: null as number | null,
+      brokenPages: null as number | null,
+    },
+    issues: [] as any[],
+    pages: [] as any[],
+    dataState: 'live',
+    fetchedAt: new Date().toISOString(),
+  }
+
+  const issuePush = (issue: {
+    id: string
+    severity: 'error' | 'warning' | 'notice'
+    category: string
+    title: string
+    detail?: string
+    url?: string
+    source: string
+  }) => {
+    result.issues.push(issue)
+  }
+
+  // 1) DataForSEO On-Page crawl (stable technical SEO source)
+  if (DATAFORSEO_AUTH) {
+    try {
+      const onpage = await withCache(historicalCache, `dfs_onpage_audit_${cleanDomain}_${crawlLimit}`, async () => {
+        const taskRes = await axios.post(
+          'https://api.dataforseo.com/v3/on_page/task_post',
+          [{
+            target: cleanDomain,
+            max_crawl_pages: crawlLimit,
+            load_resources: false,
+            enable_javascript: false,
+            enable_browser_rendering: false,
+            store_raw_html: false,
+          }],
+          {
+            headers: { Authorization: `Basic ${DATAFORSEO_AUTH}`, 'Content-Type': 'application/json' },
+            timeout: 30000,
+          },
+        )
+        const taskId = taskRes.data?.tasks?.[0]?.id
+        if (!taskId) throw new Error('No on-page task id')
+
+        let summaryPayload: any = null
+        for (let i = 0; i < 8; i++) {
+          await new Promise((r) => setTimeout(r, 4000))
+          const statusRes = await axios.get(`https://api.dataforseo.com/v3/on_page/summary/${taskId}`, {
+            headers: { Authorization: `Basic ${DATAFORSEO_AUTH}` },
+            timeout: 20000,
+          })
+          const task = statusRes.data?.tasks?.[0]
+          // 20000 = Ok / task has result
+          if (task?.status_code === 20000 && task?.result?.[0]) {
+            summaryPayload = statusRes.data
+            break
+          }
+            // 40601 / 40602 still crawling — continue
+        }
+        if (!summaryPayload) throw new Error('On-page crawl timeout')
+
+        const pagesRes = await axios.get(`https://api.dataforseo.com/v3/on_page/pages/${taskId}`, {
+          headers: { Authorization: `Basic ${DATAFORSEO_AUTH}` },
+          params: { limit: crawlLimit },
+          timeout: 25000,
+        })
+        return { summary: summaryPayload, pages: pagesRes.data }
+      })
+
+      result.sources.dataforseo_onpage = {
+        summary: onpage.summary?.tasks?.[0]?.result?.[0] || onpage.summary,
+        pages: onpage.pages?.tasks?.[0]?.result?.[0] || onpage.pages,
+      }
+      const sum = result.sources.dataforseo_onpage.summary || {}
+      const pageInfo = result.sources.dataforseo_onpage.pages || {}
+      const pageItems = Array.isArray(pageInfo.items) ? pageInfo.items : []
+      result.summary.pagesCrawled = Number(sum.crawl_progress?.pages_crawled ?? pageItems.length ?? sum.pages_crawled ?? 0) || pageItems.length
+      result.summary.onpageScore = sum.page_metrics?.onpage_score != null
+        ? Number(sum.page_metrics.onpage_score)
+        : (sum.onpage_score != null ? Number(sum.onpage_score) : null)
+      result.summary.brokenPages = Number(sum.page_metrics?.checks?.is_broken ?? sum.checks?.is_broken ?? 0) || null
+
+      // Checks object often comes as counters
+      const checks = sum.page_metrics?.checks || sum.checks || {}
+      const checkDefs: Array<{ key: string; severity: 'error' | 'warning' | 'notice'; category: string; title: string }> = [
+        { key: 'is_4xx_code', severity: 'error', category: 'HTTP', title: '4xx client errors' },
+        { key: 'is_5xx_code', severity: 'error', category: 'HTTP', title: '5xx server errors' },
+        { key: 'is_broken', severity: 'error', category: 'HTTP', title: 'Broken pages' },
+        { key: 'is_redirect', severity: 'notice', category: 'HTTP', title: 'Redirect pages' },
+        { key: 'no_title', severity: 'error', category: 'On-Page', title: 'Missing title tags' },
+        { key: 'title_too_short', severity: 'warning', category: 'On-Page', title: 'Title too short' },
+        { key: 'title_too_long', severity: 'warning', category: 'On-Page', title: 'Title too long' },
+        { key: 'no_description', severity: 'warning', category: 'On-Page', title: 'Missing meta description' },
+        { key: 'description_too_short', severity: 'notice', category: 'On-Page', title: 'Meta description too short' },
+        { key: 'description_too_long', severity: 'notice', category: 'On-Page', title: 'Meta description too long' },
+        { key: 'no_h1_tag', severity: 'error', category: 'On-Page', title: 'Missing H1' },
+        { key: 'duplicate_title_tag', severity: 'warning', category: 'Duplicates', title: 'Duplicate titles' },
+        { key: 'duplicate_description', severity: 'warning', category: 'Duplicates', title: 'Duplicate meta descriptions' },
+        { key: 'duplicate_content', severity: 'warning', category: 'Duplicates', title: 'Duplicate content' },
+        { key: 'no_image_alt', severity: 'warning', category: 'Accessibility', title: 'Images missing alt text' },
+        { key: 'no_favicon', severity: 'notice', category: 'On-Page', title: 'Missing favicon' },
+        { key: 'no_doctype', severity: 'notice', category: 'Technical', title: 'Missing doctype' },
+        { key: 'is_orphan_page', severity: 'warning', category: 'Internal links', title: 'Orphan pages' },
+        { key: 'has_misspelling', severity: 'notice', category: 'Content', title: 'Possible spelling issues' },
+        { key: 'low_content_rate', severity: 'warning', category: 'Content', title: 'Thin content' },
+        { key: 'high_waiting_time', severity: 'warning', category: 'Performance', title: 'High server response time' },
+        { key: 'high_loading_time', severity: 'warning', category: 'Performance', title: 'High page load time' },
+        { key: 'size_greater_than_3mb', severity: 'warning', category: 'Performance', title: 'Pages larger than 3MB' },
+        { key: 'no_image_title', severity: 'notice', category: 'On-Page', title: 'Images missing title' },
+        { key: 'canonical_to_broken', severity: 'error', category: 'Canonical', title: 'Canonical points to broken URL' },
+        { key: 'canonical_to_redirect', severity: 'warning', category: 'Canonical', title: 'Canonical points to redirect' },
+        { key: 'has_render_blocking_resources', severity: 'warning', category: 'Performance', title: 'Render-blocking resources' },
+        { key: 'no_content_encoding', severity: 'notice', category: 'Technical', title: 'Missing content encoding' },
+        { key: 'https_to_http_links', severity: 'warning', category: 'Security', title: 'HTTPS pages linking to HTTP' },
+        { key: 'is_http', severity: 'warning', category: 'Security', title: 'HTTP (non-HTTPS) pages' },
+      ]
+
+      for (const def of checkDefs) {
+        const count = Number(checks[def.key] ?? 0) || 0
+        if (count > 0) {
+          issuePush({
+            id: `dfs-${def.key}`,
+            severity: def.severity,
+            category: def.category,
+            title: def.title,
+            detail: `${count} page(s)`,
+            source: 'dataforseo',
+          })
+        }
+      }
+
+      for (const p of pageItems.slice(0, crawlLimit)) {
+        const meta = p.meta || {}
+        const checksPage = p.checks || {}
+        result.pages.push({
+          url: p.url || p.resource || '',
+          status: Number(p.status_code || p.statusCode || 0) || 0,
+          title: meta.title || p.title || '',
+          description: meta.description || '',
+          h1: Array.isArray(meta.htags?.h1) ? meta.htags.h1[0] : (meta.h1 || ''),
+          wordCount: Number(meta.content?.plain_text_word_count ?? meta.plain_text_word_count ?? p.word_count ?? 0) || 0,
+          loadTime: Number(p.page_timing?.duration_time ?? p.load_time ?? 0) || 0,
+          size: Number(p.size || p.total_dom_size || 0) || 0,
+          onpageScore: p.onpage_score != null ? Number(p.onpage_score) : null,
+          issues: Object.entries(checksPage)
+            .filter(([, v]) => v === true || (typeof v === 'number' && v > 0))
+            .map(([k]) => k)
+            .slice(0, 12),
+          source: 'dataforseo',
+        })
+      }
+
+      if (!result.activeSources.includes('DataForSEO On-Page')) result.activeSources.push('DataForSEO On-Page')
+    } catch {
+      result.softDegraded.push('DataForSEO On-Page')
+    }
+  } else {
+    result.softDegraded.push('DataForSEO On-Page')
+  }
+
+  // 2) Homepage instant check (helps when crawl is partial / timed out)
+  if (DATAFORSEO_AUTH) {
+    try {
+      const instant = await withCache(historicalCache, `dfs_instant_${cleanDomain}`, async () => {
+        const r = await axios.post(
+          'https://api.dataforseo.com/v3/on_page/instant_pages',
+          [{
+            url: targetUrl,
+            enable_javascript: false,
+            load_resources: false,
+            enable_browser_rendering: false,
+          }],
+          {
+            headers: { Authorization: `Basic ${DATAFORSEO_AUTH}`, 'Content-Type': 'application/json' },
+            timeout: 45000,
+          },
+        )
+        return r.data
+      })
+      result.sources.dataforseo_instant = instant?.tasks?.[0]?.result?.[0] || instant
+      const items = instant?.tasks?.[0]?.result?.[0]?.items || []
+      const home = Array.isArray(items) ? items[0] : null
+      if (home) {
+        if (!result.activeSources.includes('DataForSEO Instant')) result.activeSources.push('DataForSEO Instant')
+        const meta = home.meta || {}
+        if (!meta.title) {
+          issuePush({ id: 'home-no-title', severity: 'error', category: 'On-Page', title: 'Homepage missing title', url: targetUrl, source: 'dataforseo' })
+        }
+        if (!meta.description) {
+          issuePush({ id: 'home-no-desc', severity: 'warning', category: 'On-Page', title: 'Homepage missing meta description', url: targetUrl, source: 'dataforseo' })
+        }
+        const h1s = meta.htags?.h1
+        if (!h1s || (Array.isArray(h1s) && h1s.length === 0)) {
+          issuePush({ id: 'home-no-h1', severity: 'error', category: 'On-Page', title: 'Homepage missing H1', url: targetUrl, source: 'dataforseo' })
+        }
+        if (home.status_code && Number(home.status_code) >= 400) {
+          issuePush({
+            id: 'home-status',
+            severity: 'error',
+            category: 'HTTP',
+            title: `Homepage returns HTTP ${home.status_code}`,
+            url: targetUrl,
+            source: 'dataforseo',
+          })
+        }
+        // Ensure homepage lands in pages sample
+        if (!result.pages.some((p: any) => String(p.url || '').includes(cleanDomain))) {
+          result.pages.unshift({
+            url: home.url || targetUrl,
+            status: Number(home.status_code || 0) || 0,
+            title: meta.title || '',
+            description: meta.description || '',
+            h1: Array.isArray(meta.htags?.h1) ? meta.htags.h1[0] : '',
+            wordCount: Number(meta.content?.plain_text_word_count || 0) || 0,
+            loadTime: Number(home.page_timing?.duration_time || 0) || 0,
+            size: Number(home.size || 0) || 0,
+            onpageScore: home.onpage_score != null ? Number(home.onpage_score) : null,
+            issues: [],
+            source: 'dataforseo-instant',
+          })
+        }
+      }
+    } catch {
+      result.softDegraded.push('DataForSEO Instant')
+    }
+  }
+
+  // 3) PageSpeed Insights (SEO + performance lanes) — mobile
+  if (PAGESPEED_API_KEY) {
+    try {
+      const psi = await withCache(realtimeCache, `psi_audit_${cleanDomain}_mobile`, async () => {
+        const r = await axios.get('https://www.googleapis.com/pagespeedonline/v5/runPagespeed', {
+          params: {
+            url: targetUrl,
+            strategy: 'mobile',
+            key: PAGESPEED_API_KEY,
+            category: ['performance', 'accessibility', 'best-practices', 'seo'],
+          },
+          timeout: 45000,
+        })
+        return r.data
+      })
+      result.sources.pagespeed_mobile = {
+        categories: psi?.lighthouseResult?.categories || {},
+        audits: psi?.lighthouseResult?.audits || {},
+      }
+      const cats = psi?.lighthouseResult?.categories || {}
+      result.summary.lighthouseSeo = cats.seo?.score != null ? Math.round(Number(cats.seo.score) * 100) : null
+      result.summary.performanceMobile = cats.performance?.score != null ? Math.round(Number(cats.performance.score) * 100) : null
+      const audits = psi?.lighthouseResult?.audits || {}
+      const important = [
+        'document-title',
+        'meta-description',
+        'http-status-code',
+        'is-crawlable',
+        'robots-txt',
+        'canonical',
+        'hreflang',
+        'image-alt',
+        'link-text',
+        'crawlable-anchors',
+        'viewport',
+        'font-size',
+        'tap-targets',
+        'structured-data',
+      ]
+      for (const id of important) {
+        const a = audits[id]
+        if (!a) continue
+        if (a.score != null && Number(a.score) < 1) {
+          issuePush({
+            id: `psi-${id}`,
+            severity: Number(a.score) === 0 ? 'error' : 'warning',
+            category: 'Lighthouse SEO',
+            title: a.title || id,
+            detail: a.description ? String(a.description).replace(/<[^>]+>/g, '').slice(0, 180) : undefined,
+            url: targetUrl,
+            source: 'pagespeed',
+          })
+        }
+      }
+      if (!result.activeSources.includes('PageSpeed')) result.activeSources.push('PageSpeed')
+    } catch {
+      result.softDegraded.push('PageSpeed')
+    }
+  }
+
+  // 4) DataForSEO backlinks summary — broken backlink / broken pages risk
+  if (DATAFORSEO_AUTH) {
+    try {
+      const bl = await withCache(realtimeCache, `dfs_bl_summary_audit_${cleanDomain}`, async () => {
+        const r = await axios.post(
+          'https://api.dataforseo.com/v3/backlinks/summary/live',
+          [{ target: cleanDomain, include_subdomains: true }],
+          {
+            headers: { Authorization: `Basic ${DATAFORSEO_AUTH}`, 'Content-Type': 'application/json' },
+            timeout: 20000,
+          },
+        )
+        return r.data
+      })
+      const row = bl?.tasks?.[0]?.result?.[0]
+      result.sources.dataforseo_backlinks_summary = row
+      if (row) {
+        result.summary.brokenBacklinks = Number(row.broken_backlinks ?? 0) || 0
+        if (Number(row.broken_backlinks || 0) > 0) {
+          issuePush({
+            id: 'broken-backlinks',
+            severity: Number(row.broken_backlinks) > 50 ? 'error' : 'warning',
+            category: 'Backlinks',
+            title: 'Broken backlinks pointed at this domain',
+            detail: `${row.broken_backlinks} broken backlinks`,
+            source: 'dataforseo',
+          })
+        }
+        if (Number(row.broken_pages || 0) > 0) {
+          issuePush({
+            id: 'broken-linked-pages',
+            severity: 'warning',
+            category: 'Backlinks',
+            title: 'Broken pages receiving backlinks',
+            detail: `${row.broken_pages} broken pages`,
+            source: 'dataforseo',
+          })
+        }
+        if (!result.activeSources.includes('DataForSEO Backlinks')) result.activeSources.push('DataForSEO Backlinks')
+      }
+    } catch {
+      result.softDegraded.push('DataForSEO Backlinks')
+    }
+  }
+
+  // 5) Optional GTmetrix health signal (soft)
+  // (kept out of critical path — may be unconfigured)
+
+  // Issue rollup
+  result.summary.issuesTotal = result.issues.length
+  result.summary.errors = result.issues.filter((i: any) => i.severity === 'error').length
+  result.summary.warnings = result.issues.filter((i: any) => i.severity === 'warning').length
+  result.summary.notices = result.issues.filter((i: any) => i.severity === 'notice').length
+  if (!result.summary.pagesCrawled) result.summary.pagesCrawled = result.pages.length
+
+  // Sort issues: errors first
+  const sevRank = { error: 0, warning: 1, notice: 2 } as Record<string, number>
+  result.issues.sort((a: any, b: any) => (sevRank[a.severity] ?? 9) - (sevRank[b.severity] ?? 9))
+
+  if (!result.activeSources.length && !result.issues.length && !result.pages.length) result.dataState = 'unavailable'
+  if (result.activeSources.length || result.issues.length || result.pages.length) void persistSnapshot(domain, 'site_audit_agg', result)
   res.json(result)
 })
 

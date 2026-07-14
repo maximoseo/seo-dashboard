@@ -32,6 +32,8 @@ describe('project route helpers', () => {
     expect(getModuleFromPathname('/projects/maximo-seo.ai')).toBe(null)
     expect(getModuleFromPathname('/projects/maximo-seo.ai/tasks')).toBe('tasks')
     expect(getModuleFromPathname('/projects/galoz.co.il/geo-ai')).toBe('geo-ai')
+    expect(getModuleFromPathname('/projects/galoz.co.il/site-audit')).toBe('site-audit')
+    expect(legacyRouteToProjectModule('/site-audit')).toBe('site-audit')
     expect(getModuleFromPathname('/settings')).toBe(null)
   })
 })

@@ -19,6 +19,7 @@ export type ProjectModuleSlug =
   | 'keywords'
   | 'backlinks'
   | 'pages'
+  | 'site-audit'
   | 'vitals'
   | 'alerts'
   | 'competitors'
@@ -53,6 +54,7 @@ const moduleDefinitions: Array<Omit<ProjectModuleSummary, 'href'>> = [
   { slug: 'keywords', label: 'Keywords', state: 'cached', description: 'Organic rankings, opportunities and keyword movement.' },
   { slug: 'backlinks', label: 'Backlinks', state: 'cached', description: 'Authority, referring domains and link risk.' },
   { slug: 'pages', label: 'Pages', state: 'cached', description: 'Technical SEO page inventory and priorities.' },
+  { slug: 'site-audit', label: 'Site Audit', state: 'cached', description: 'Technical SEO crawl issues, on-page checks and Lighthouse SEO.' },
   { slug: 'vitals', label: 'Vitals', state: 'cached', description: 'Core Web Vitals and Lighthouse performance.' },
   { slug: 'alerts', label: 'Alerts', state: 'live', description: 'Rules engine anomalies and provider warnings.' },
   { slug: 'competitors', label: 'Competitors', state: 'cached', description: 'Competitive visibility and gap discovery.' },

@@ -22,6 +22,9 @@ interface PageRow {
   wordCount: number
   loadTime: number
   source?: string
+  description?: string
+  h1?: string
+  onpageIssues?: string[]
 }
 
 function getStatusColor(status: number) {
@@ -64,6 +67,9 @@ export default function PagesPage() {
         wordCount: Number(p.wordCount) || 0,
         loadTime: Number(p.loadTime) || 0,
         source: p.source,
+        description: p.description || '',
+        h1: p.h1 || '',
+        onpageIssues: Array.isArray(p.onpageIssues) ? p.onpageIssues : [],
       }))
     }
     return []
@@ -120,6 +126,7 @@ export default function PagesPage() {
   const cards = [
     { label: 'Top pages', value: summary.total, color: 'text-fg' },
     { label: 'With traffic', value: summary.withTraffic ?? pages.filter((p) => p.traffic > 0).length, color: 'text-green' },
+    { label: 'With on-page', value: summary.withOnpage ?? pages.filter((p) => p.wordCount > 0 || p.h1 || (p.onpageIssues?.length || 0) > 0).length, color: 'text-accent-light' },
     { label: 'Redirects', value: summary.redirects, color: 'text-yellow' },
     { label: 'Errors', value: summary.errors, color: 'text-red' },
   ]
@@ -130,7 +137,7 @@ export default function PagesPage() {
         <div>
           <h2 className="text-base md:text-lg font-semibold text-fg">Top Pages</h2>
           <p className="text-xs md:text-sm text-fg-muted mt-0.5">
-            Live organic pages for {domain} — SEMrush + DataForSEO + keyword URL rollup
+            Live organic pages for {domain} — SEMrush + DataForSEO + Ahrefs + On-Page technical fields
           </p>
         </div>
         <div className="flex gap-1.5 flex-wrap items-center">
@@ -162,7 +169,7 @@ export default function PagesPage() {
         </div>
       )}
 
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 md:gap-4">
+      <div className="grid grid-cols-2 lg:grid-cols-5 gap-3 md:gap-4">
         {cards.map((card, i) => (
           <motion.div
             key={card.label}
@@ -256,11 +263,13 @@ export default function PagesPage() {
               <div key={p.url} className="p-3.5 space-y-2">
                 <p className="text-sm font-medium text-fg truncate">{p.url}</p>
                 <p className="text-[11px] text-fg-dim truncate">{p.title}</p>
-                <div className="flex items-center gap-3 text-xs text-fg-muted">
+                <div className="flex items-center gap-3 text-xs text-fg-muted flex-wrap">
                   <span className={`px-1.5 py-0.5 rounded ${sc.bg} ${sc.text}`}>{p.status}</span>
                   <span>Traffic: {p.traffic ? p.traffic.toLocaleString() : '—'}</span>
                   <span>KWs: {p.keywords || '—'}</span>
                   <span>BL: {p.backlinks}</span>
+                  {p.wordCount > 0 && <span>Words: {p.wordCount}</span>}
+                  {p.h1 && <span className="truncate max-w-[140px]">H1: {p.h1}</span>}
                 </div>
               </div>
             )
@@ -269,7 +278,7 @@ export default function PagesPage() {
 
         {/* Desktop table */}
         <div className="hidden md:block overflow-x-auto table-scroll">
-          <table className="w-full text-sm min-w-[800px]">
+          <table className="w-full text-sm min-w-[980px]">
             <thead>
               <tr className="text-xs font-semibold tracking-wider uppercase text-fg-dim border-b border-border">
                 <th className="text-left py-3 px-5">URL</th>
@@ -277,6 +286,7 @@ export default function PagesPage() {
                 <th className="text-right py-3 px-3">Traffic</th>
                 <th className="text-right py-3 px-3">Keywords</th>
                 <th className="text-right py-3 px-3">Backlinks</th>
+                <th className="text-right py-3 px-3">Words</th>
                 <th className="text-right py-3 px-3">Score</th>
               </tr>
             </thead>
@@ -286,7 +296,7 @@ export default function PagesPage() {
                 const isExpanded = expandedUrl === p.url
                 return (
                   <tr key={p.url} className="border-t border-border hover:bg-white/[0.02]">
-                    <td className="py-3 px-5" colSpan={isExpanded ? 6 : 1}>
+                    <td className="py-3 px-5" colSpan={isExpanded ? 7 : 1}>
                       {!isExpanded ? (
                         <button type="button" className="text-left w-full" onClick={() => setExpandedUrl(p.url)}>
                           <p className="text-fg font-medium truncate max-w-[320px]">{p.url}</p>
@@ -320,6 +330,28 @@ export default function PagesPage() {
                               <p className="text-[10px] uppercase text-fg-dim">Backlinks</p>
                               <p className="text-sm text-fg">{p.backlinks}</p>
                             </div>
+                            <div>
+                              <p className="text-[10px] uppercase text-fg-dim">H1</p>
+                              <p className="text-sm text-fg">{p.h1 || '—'}</p>
+                            </div>
+                            <div>
+                              <p className="text-[10px] uppercase text-fg-dim">Meta description</p>
+                              <p className="text-sm text-fg line-clamp-2">{p.description || '—'}</p>
+                            </div>
+                            <div>
+                              <p className="text-[10px] uppercase text-fg-dim">Word count</p>
+                              <p className="text-sm text-fg">{p.wordCount || '—'}</p>
+                            </div>
+                            <div>
+                              <p className="text-[10px] uppercase text-fg-dim">Load time</p>
+                              <p className="text-sm text-fg">{p.loadTime ? `${Math.round(p.loadTime)}ms` : '—'}</p>
+                            </div>
+                            <div className="md:col-span-2">
+                              <p className="text-[10px] uppercase text-fg-dim">On-page checks</p>
+                              <p className="text-sm text-fg">
+                                {(p.onpageIssues || []).slice(0, 6).join(', ') || '—'}
+                              </p>
+                            </div>
                           </div>
                         </div>
                       )}
@@ -332,6 +364,7 @@ export default function PagesPage() {
                         <td className="py-3 px-3 text-right text-fg-muted">{p.traffic > 0 ? p.traffic.toLocaleString() : '—'}</td>
                         <td className="py-3 px-3 text-right text-fg-muted">{p.keywords || '—'}</td>
                         <td className="py-3 px-3 text-right text-fg-muted">{p.backlinks}</td>
+                        <td className="py-3 px-3 text-right text-fg-muted">{p.wordCount || '—'}</td>
                         <td className="py-3 px-3">
                           {p.score > 0 ? (
                             <div className="flex items-center justify-end gap-2">

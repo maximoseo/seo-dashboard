@@ -23,6 +23,7 @@ const navItems = [
   { name: 'Keywords', icon: KeywordsIcon },
   { name: 'Backlinks', icon: BacklinksIcon },
   { name: 'Pages', icon: PagesIcon },
+  { name: 'Site Audit', icon: PagesIcon },
   { name: 'Vitals', icon: VitalsIcon },
   { name: 'Content', icon: ContentIcon },
   { name: 'Competitors', icon: CompetitorsIcon },

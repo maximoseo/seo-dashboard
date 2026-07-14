@@ -128,3 +128,24 @@ export function useAlerts(domain: string | null) {
 export async function refreshAlerts(domain: string) {
   return fetchAPI('alerts/aggregated', { domain, refresh: '1' })
 }
+
+export function useSiteAudit(domain: string | null, market?: string | null) {
+  const marketParam = market?.trim() || ''
+  return useQuery({
+    queryKey: ['site-audit', domain, marketParam],
+    queryFn: async () => {
+      const params: Record<string, string> = { domain: domain!, max_pages: '20' }
+      if (marketParam) params.market = marketParam
+      return fetchAPI('site-audit/aggregated', params)
+    },
+    enabled: !!domain,
+    staleTime: 30 * 60 * 1000,
+  })
+}
+
+/** Force live re-fetch of technical site audit. */
+export async function refreshSiteAudit(domain: string, market?: string | null) {
+  const params: Record<string, string> = { domain, refresh: '1', max_pages: '20' }
+  if (market?.trim()) params.market = market.trim()
+  return fetchAPI('site-audit/aggregated', params)
+}

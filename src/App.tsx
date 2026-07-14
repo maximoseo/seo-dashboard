@@ -22,6 +22,7 @@ const ProjectSettingsPage = lazy(() => import('@/pages/project/ProjectSettingsPa
 const KeywordsPage = lazy(() => import('@/pages/KeywordsPage'))
 const BacklinksPage = lazy(() => import('@/pages/BacklinksPage'))
 const PagesPage = lazy(() => import('@/pages/PagesPage'))
+const SiteAuditPage = lazy(() => import('@/pages/SiteAuditPage'))
 const VitalsPage = lazy(() => import('@/pages/VitalsPage'))
 const AlertsPage = lazy(() => import('@/pages/AlertsPage'))
 const CompetitorsPage = lazy(() => import('@/pages/CompetitorsPage'))
@@ -38,6 +39,7 @@ const navRouteMap: Record<string, string> = {
   Keywords: '/keywords',
   Backlinks: '/backlinks',
   Pages: '/pages',
+  'Site Audit': '/site-audit',
   Vitals: '/vitals',
   Alerts: '/alerts',
   Competitors: '/competitors',
@@ -57,6 +59,7 @@ const moduleNavMap: Record<ProjectModule, string> = {
   keywords: 'Keywords',
   backlinks: 'Backlinks',
   pages: 'Pages',
+  'site-audit': 'Site Audit',
   vitals: 'Vitals',
   alerts: 'Alerts',
   competitors: 'Competitors',
@@ -76,6 +79,7 @@ const pageTitles: Record<string, { title: string; subtitle: string }> = {
   '/keywords': { title: 'Keywords', subtitle: 'Track organic keyword rankings and opportunities' },
   '/backlinks': { title: 'Backlinks', subtitle: 'Analyze authority, risk, anchors and lost links' },
   '/pages': { title: 'Pages', subtitle: 'Technical SEO crawl inventory and page priorities' },
+  '/site-audit': { title: 'Site Audit', subtitle: 'Technical SEO checks, on-page issues and crawl findings' },
   '/vitals': { title: 'Vitals', subtitle: 'Core Web Vitals and Lighthouse performance metrics' },
   '/alerts': { title: 'Alerts', subtitle: 'SEO risks, anomalies and operator workflow' },
   '/competitors': { title: 'Competitors', subtitle: 'Competitor discovery, gaps and change feed' },
@@ -200,6 +204,7 @@ function DashboardShellInner() {
                   <Route path="keywords" element={<KeywordsPage />} />
                   <Route path="backlinks" element={<BacklinksPage />} />
                   <Route path="pages" element={<PagesPage />} />
+                  <Route path="site-audit" element={<SiteAuditPage />} />
                   <Route path="vitals" element={<VitalsPage />} />
                   <Route path="alerts" element={<AlertsPage />} />
                   <Route path="competitors" element={<CompetitorsPage />} />
@@ -213,6 +218,7 @@ function DashboardShellInner() {
                 <Route path="/keywords" element={<KeywordsPage />} />
                 <Route path="/backlinks" element={<BacklinksPage />} />
                 <Route path="/pages" element={<PagesPage />} />
+                <Route path="/site-audit" element={<SiteAuditPage />} />
                 <Route path="/vitals" element={<VitalsPage />} />
                 <Route path="/alerts" element={<AlertsPage />} />
                 <Route path="/competitors" element={<CompetitorsPage />} />

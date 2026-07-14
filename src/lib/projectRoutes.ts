@@ -6,6 +6,7 @@ const legacyRouteByModule: Record<ProjectModule, string> = {
   keywords: '/keywords',
   backlinks: '/backlinks',
   pages: '/pages',
+  'site-audit': '/site-audit',
   vitals: '/vitals',
   alerts: '/alerts',
   competitors: '/competitors',

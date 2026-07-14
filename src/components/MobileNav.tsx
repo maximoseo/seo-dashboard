@@ -12,6 +12,7 @@ const mainItems = [
 const moreItems = [
   { name: 'Command Center', icon: VitalsMobileIcon },
   { name: 'Pages', icon: PagesMobileIcon },
+  { name: 'Site Audit', icon: PagesMobileIcon },
   { name: 'Content', icon: ContentMobileIcon },
   { name: 'Competitors', icon: CompetitorsMobileIcon },
   { name: 'Local SEO', icon: PagesMobileIcon },

@@ -7,6 +7,7 @@ export type ProjectModuleSlug =
   | 'keywords'
   | 'backlinks'
   | 'pages'
+  | 'site-audit'
   | 'vitals'
   | 'alerts'
   | 'competitors'
