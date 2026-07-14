@@ -14,6 +14,12 @@ export type KeywordRow = {
   cpc: number | null
   trend: 'up' | 'down' | 'stable' | 'new' | 'lost' | null
   source: string
+  /** Best known rank per provider (for multi-tool compare UI). */
+  sourcePositions?: Record<string, number | null>
+  /** Search volume estimates per provider when available. */
+  volumeBySource?: Record<string, number | null>
+  intent?: string | null
+  serpFeatures?: string[]
 }
 
 export type CompetitorRow = {
@@ -68,44 +74,56 @@ export function keywordsFromSemrush(rows: Record<string, string>[] | null | unde
       else if (position > previous) trend = 'down'
       else trend = 'stable'
     }
+    const volume = num(row['Search Volume'] ?? row.Nq)
     return {
       keyword: str(row.Keyword ?? row.Ph) || '',
       position,
       previousPosition: previous,
-      volume: num(row['Search Volume'] ?? row.Nq),
+      volume,
       difficulty: num(row['Keyword Difficulty'] ?? row.Kd),
       traffic: num(row.Traffic ?? row.Tr),
       url: str(row.URL ?? row.Ur),
       cpc: num(row.CPC ?? row.Cp),
       trend,
       source: 'semrush',
+      sourcePositions: { semrush: position },
+      volumeBySource: volume != null ? { semrush: volume } : undefined,
+      intent: null,
+      serpFeatures: [],
     }
   }).filter((r) => r.keyword)
 }
 
 export function keywordsFromAhrefs(payload: any): KeywordRow[] {
-  const list = payload?.keywords || payload?.data || []
+  const list = payload?.keywords || payload?.data?.keywords || payload?.data || []
   if (!Array.isArray(list)) return []
   return list.map((item: any) => {
-    const position = num(item.position ?? item.rank)
-    const change = num(item.position_change ?? item.position_trend)
+    const position = num(item.best_position ?? item.position ?? item.rank)
+    const change = num(item.position_change ?? item.position_trend ?? item.best_position_diff)
     let trend: KeywordRow['trend'] = null
     if (change != null) {
-      if (change > 0) trend = 'up'
-      else if (change < 0) trend = 'down'
+      // Ahrefs: positive change often means improved (moved up) depending on endpoint;
+      // best_position_diff: negative = improved in some versions — keep sign of rank delta:
+      if (change > 0) trend = 'down'
+      else if (change < 0) trend = 'up'
       else trend = 'stable'
     }
+    const volume = num(item.volume ?? item.search_volume)
     return {
       keyword: str(item.keyword) || '',
       position,
-      previousPosition: position != null && change != null ? position + change : null,
-      volume: num(item.volume ?? item.search_volume),
+      previousPosition: position != null && change != null ? position - change : null,
+      volume,
       difficulty: num(item.difficulty ?? item.keyword_difficulty ?? item.kd),
       traffic: num(item.traffic ?? item.sum_traffic),
-      url: str(item.url ?? item.landing_page),
+      url: str(item.best_position_url ?? item.url ?? item.landing_page),
       cpc: num(item.cpc),
       trend,
       source: 'ahrefs',
+      sourcePositions: { ahrefs: position },
+      volumeBySource: volume != null ? { ahrefs: volume } : undefined,
+      intent: null,
+      serpFeatures: [],
     }
   }).filter((r: KeywordRow) => r.keyword)
 }
@@ -124,17 +142,29 @@ export function keywordsFromDataForSEO(payload: any): KeywordRow[] {
         const kw = item?.keyword_data?.keyword || item?.keyword || item?.key
         const metrics = item?.keyword_data?.keyword_info || item
         const ranked = item?.ranked_serp_element?.serp_item || item
+        const position = num(ranked?.rank_group ?? ranked?.rank_absolute ?? item?.rank ?? item?.position)
+        const volume = num(metrics?.search_volume ?? item?.search_volume ?? item?.volume)
+        const kdRaw = num(item?.keyword_data?.keyword_properties?.keyword_difficulty
+          ?? metrics?.competition
+          ?? item?.competition
+          ?? item?.difficulty)
+        // DataForSEO competition is often 0-1; convert to 0-100 when needed
+        const difficulty = kdRaw != null && kdRaw <= 1 ? Math.round(kdRaw * 100) : kdRaw
         out.push({
           keyword: str(kw) || '',
-          position: num(ranked?.rank_group ?? ranked?.rank_absolute ?? item?.rank ?? item?.position),
+          position,
           previousPosition: null,
-          volume: num(metrics?.search_volume ?? item?.search_volume ?? item?.volume),
-          difficulty: num(metrics?.competition ?? item?.competition ?? item?.difficulty),
+          volume,
+          difficulty,
           traffic: num(item?.etv ?? ranked?.etv),
           url: str(ranked?.url ?? item?.url),
           cpc: num(metrics?.cpc ?? item?.cpc),
           trend: null,
           source: 'dataforseo',
+          sourcePositions: { dataforseo: position },
+          volumeBySource: volume != null ? { dataforseo: volume } : undefined,
+          intent: null,
+          serpFeatures: [],
         })
       }
     }
@@ -147,36 +177,53 @@ export function keywordsFromSerpstat(payload: any): KeywordRow[] {
   const data = payload?.result?.data || payload?.data || payload
   const list = Array.isArray(data) ? data : Array.isArray(data?.data) ? data.data : []
   if (!Array.isArray(list)) return []
-  return list.map((item: any) => ({
-    keyword: str(item.keyword || item.kw || item.query) || '',
-    position: num(item.position ?? item.pos ?? item.rank),
-    previousPosition: num(item.previous_position ?? item.prev_pos),
-    volume: num(item.region_queries_count ?? item.volume ?? item.search_volume ?? item.region_queries_count_wide),
-    difficulty: num(item.difficulty ?? item.concurrency ?? item.competition),
-    traffic: num(item.traff ?? item.traffic),
-    url: str(item.url),
-    cpc: num(item.cost ?? item.cpc),
-    trend: null,
-    source: 'serpstat',
-  })).filter((r: KeywordRow) => r.keyword)
+  return list.map((item: any) => {
+    const position = num(item.position ?? item.pos ?? item.rank)
+    const volume = num(item.region_queries_count ?? item.volume ?? item.search_volume ?? item.region_queries_count_wide)
+    return {
+      keyword: str(item.keyword || item.kw || item.query) || '',
+      position,
+      previousPosition: num(item.previous_position ?? item.prev_pos),
+      volume,
+      difficulty: num(item.difficulty ?? item.concurrency ?? item.competition),
+      traffic: num(item.traff ?? item.traffic),
+      url: str(item.url),
+      cpc: num(item.cost ?? item.cpc),
+      trend: null,
+      source: 'serpstat',
+      sourcePositions: { serpstat: position },
+      volumeBySource: volume != null ? { serpstat: volume } : undefined,
+      intent: null,
+      serpFeatures: [],
+    }
+  }).filter((r: KeywordRow) => r.keyword)
 }
 
 /** Keywords Everywhere get_keyword_data response */
 export function keywordsFromKeywordsEverywhere(payload: any): KeywordRow[] {
   const list = payload?.data || payload
   if (!Array.isArray(list)) return []
-  return list.map((item: any) => ({
-    keyword: str(item.keyword || item.kw) || '',
-    position: null,
-    previousPosition: null,
-    volume: num(item.vol ?? item.volume ?? item.search_volume),
-    difficulty: num(item.competition ?? item.comp),
-    traffic: null,
-    url: null,
-    cpc: num(typeof item.cpc === 'object' ? item.cpc?.value : item.cpc),
-    trend: null,
-    source: 'keywords_everywhere',
-  })).filter((r: KeywordRow) => r.keyword)
+  return list.map((item: any) => {
+    const volume = num(item.vol ?? item.volume ?? item.search_volume)
+    const cpc = num(typeof item.cpc === 'object' ? item.cpc?.value : item.cpc)
+    const competition = num(item.competition ?? item.comp)
+    return {
+      keyword: str(item.keyword || item.kw) || '',
+      position: null,
+      previousPosition: null,
+      volume,
+      difficulty: competition != null && competition <= 1 ? Math.round(competition * 100) : competition,
+      traffic: null,
+      url: null,
+      cpc,
+      trend: null,
+      source: 'keywords_everywhere',
+      sourcePositions: {},
+      volumeBySource: volume != null ? { keywords_everywhere: volume } : undefined,
+      intent: null,
+      serpFeatures: [],
+    }
+  }).filter((r: KeywordRow) => r.keyword)
 }
 
 /** Optional organic results from SerpAPI (title used only as weak keyword signal when needed) */
@@ -225,7 +272,7 @@ export function backlinksFromSerpstat(payload: any): BacklinkStat {
   }
 }
 
-/** Merge multi-source keywords; prefer first non-null fields; SEMrush > Ahrefs > DFS for Israel volume context when present. */
+/** Merge multi-source keywords; prefer richest fields + keep per-provider ranks/volumes. */
 export function mergeKeywordRows(
   groups: KeywordRow[][],
   preferredSources: string[] = ['semrush', 'ahrefs', 'dataforseo', 'serpstat', 'keywords_everywhere', 'serpapi'],
@@ -237,29 +284,65 @@ export function mergeKeywordRows(
     const sb = b[0]?.source || ''
     return (order.get(sa) ?? 99) - (order.get(sb) ?? 99)
   })
+  const betterPos = (a: number | null | undefined, b: number | null | undefined) => {
+    if (a == null) return b ?? null
+    if (b == null) return a
+    return Math.min(a, b)
+  }
+  const betterNum = (a: number | null | undefined, b: number | null | undefined) => {
+    if (a == null) return b ?? null
+    if (b == null) return a
+    return Math.max(a, b)
+  }
   for (const group of sortedGroups) {
     for (const row of group) {
       const key = row.keyword.toLowerCase()
       const existing = map.get(key)
       if (!existing) {
-        map.set(key, { ...row })
+        map.set(key, {
+          ...row,
+          sourcePositions: { ...(row.sourcePositions || {}), [row.source.split('+')[0]]: row.position },
+          volumeBySource: { ...(row.volumeBySource || {}), ...(row.volume != null ? { [row.source.split('+')[0]]: row.volume } : {}) },
+        })
         continue
       }
+      const sourceKey = (row.source || 'unknown').split('+')[0]
+      const sourcePositions = {
+        ...(existing.sourcePositions || {}),
+        ...(row.sourcePositions || {}),
+        [sourceKey]: row.position ?? existing.sourcePositions?.[sourceKey] ?? null,
+      }
+      const volumeBySource = {
+        ...(existing.volumeBySource || {}),
+        ...(row.volumeBySource || {}),
+        ...(row.volume != null ? { [sourceKey]: row.volume } : {}),
+      }
+      // Prefer known ranking position over volume-only KE rows when merging primary position
+      const position = betterPos(existing.position, row.position)
+      const volume = betterNum(existing.volume, row.volume)
       map.set(key, {
         keyword: existing.keyword || row.keyword,
-        position: existing.position ?? row.position,
+        position,
         previousPosition: existing.previousPosition ?? row.previousPosition,
-        volume: existing.volume ?? row.volume,
-        difficulty: existing.difficulty ?? row.difficulty,
-        traffic: existing.traffic ?? row.traffic,
-        url: existing.url ?? row.url,
-        cpc: existing.cpc ?? row.cpc,
+        volume,
+        difficulty: betterNum(existing.difficulty, row.difficulty),
+        traffic: betterNum(existing.traffic, row.traffic),
+        url: existing.url || row.url,
+        cpc: betterNum(existing.cpc, row.cpc),
         trend: existing.trend ?? row.trend,
-        source: existing.source.includes(row.source) ? existing.source : `${existing.source}+${row.source}`,
+        source: existing.source.includes(sourceKey) ? existing.source : `${existing.source}+${sourceKey}`,
+        sourcePositions,
+        volumeBySource,
+        intent: existing.intent ?? row.intent ?? null,
+        serpFeatures: Array.from(new Set([...(existing.serpFeatures || []), ...(row.serpFeatures || [])])),
       })
     }
   }
-  return [...map.values()].sort((a, b) => (a.position ?? 999) - (b.position ?? 999))
+  return [...map.values()].sort((a, b) => {
+    const pos = (a.position ?? 999) - (b.position ?? 999)
+    if (pos !== 0) return pos
+    return (b.volume ?? 0) - (a.volume ?? 0)
+  })
 }
 
 export function competitorsFromSemrush(rows: any): CompetitorRow[] {
