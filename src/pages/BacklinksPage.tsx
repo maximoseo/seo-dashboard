@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useMemo, useState, type ReactNode } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { DataCard } from '@/components/DataCard'
 import DataStateBadge from '@/components/DataStateBadge'
@@ -49,6 +49,44 @@ function normalizeSource(raw?: string | null) {
 function sourceLabel(raw?: string | null) {
   const key = normalizeSource(raw)
   return SOURCE_LABELS[key] || raw || 'Unknown'
+}
+
+/** Build a safe external https URL from a domain or full URL. */
+function toExternalHref(raw?: string | null): string | null {
+  const s = String(raw || '').trim()
+  if (!s || s === '—') return null
+  if (/^https?:\/\//i.test(s)) return s
+  // domain or host/path without scheme
+  return `https://${s.replace(/^\/+/, '')}`
+}
+
+function ExternalLink({
+  href,
+  className,
+  title,
+  children,
+}: {
+  href?: string | null
+  className?: string
+  title?: string
+  children: ReactNode
+}) {
+  const safe = toExternalHref(href)
+  if (!safe) {
+    return <span className={className}>{children || '—'}</span>
+  }
+  return (
+    <a
+      href={safe}
+      target="_blank"
+      rel="noopener noreferrer"
+      title={title || safe}
+      className={`text-accent hover:text-accent-light hover:underline underline-offset-2 ${className || ''}`}
+      onClick={(e) => e.stopPropagation()}
+    >
+      {children}
+    </a>
+  )
 }
 
 export default function BacklinksPage() {
@@ -444,12 +482,24 @@ export default function BacklinksPage() {
               {paginatedLinks.map((bl, i) => (
                 <div key={`${bl.url_from}-${i}`} className="rounded-xl border border-border bg-bg-darkest p-3.5">
                   <div className="flex items-center justify-between gap-2">
-                    <p className="text-sm font-medium text-fg truncate">{bl.domain_from || '—'}</p>
+                    <ExternalLink
+                      href={bl.url_from || bl.domain_from}
+                      className="text-sm font-medium truncate"
+                      title={bl.url_from || bl.domain_from}
+                    >
+                      {bl.domain_from || '—'}
+                    </ExternalLink>
                     <span className="text-[10px] px-1.5 py-0.5 rounded bg-accent/10 text-accent-light border border-accent/20">
                       {sourceLabel(bl.source)}
                     </span>
                   </div>
-                  <p className="text-xs text-fg-dim truncate mt-0.5">{bl.url_from || ''}</p>
+                  <ExternalLink
+                    href={bl.url_from}
+                    className="text-xs text-fg-dim truncate mt-0.5 block"
+                    title={bl.url_from}
+                  >
+                    {bl.url_from || ''}
+                  </ExternalLink>
                   <div className="flex items-center gap-3 mt-2 text-xs text-fg-muted">
                     <span className="truncate">Anchor: {bl.anchor || '—'}</span>
                     <span>Rank: {bl.rank || '—'}</span>
@@ -474,10 +524,30 @@ export default function BacklinksPage() {
                   {paginatedLinks.map((bl, i) => (
                     <tr key={`${bl.url_from}-${i}`} className="border-b border-border/50 hover:bg-white/[0.02]">
                       <td className="py-2.5 px-3">
-                        <p className="text-fg font-medium truncate max-w-[200px]">{bl.domain_from || '—'}</p>
-                        <p className="text-xs text-fg-dim truncate max-w-[200px]">{bl.url_from?.slice(0, 50) || ''}</p>
+                        <ExternalLink
+                          href={bl.url_from || bl.domain_from}
+                          className="font-medium truncate max-w-[220px] block"
+                          title={bl.url_from || bl.domain_from}
+                        >
+                          {bl.domain_from || '—'}
+                        </ExternalLink>
+                        <ExternalLink
+                          href={bl.url_from}
+                          className="text-xs text-fg-dim truncate max-w-[220px] block mt-0.5"
+                          title={bl.url_from}
+                        >
+                          {bl.url_from?.slice(0, 60) || ''}
+                        </ExternalLink>
                       </td>
-                      <td className="py-2.5 px-3 text-fg-muted truncate max-w-[150px]">{bl.anchor || '—'}</td>
+                      <td className="py-2.5 px-3 text-fg-muted truncate max-w-[150px]">
+                        {toExternalHref(bl.url_from) ? (
+                          <ExternalLink href={bl.url_from} className="text-fg-muted truncate max-w-[150px] block" title={bl.url_from}>
+                            {bl.anchor || bl.url_from || '—'}
+                          </ExternalLink>
+                        ) : (
+                          bl.anchor || '—'
+                        )}
+                      </td>
                       <td className="py-2.5 px-3 text-right text-fg-muted">{bl.rank || '—'}</td>
                       <td className="py-2.5 px-3 text-right">
                         <span className={`text-xs px-1.5 py-0.5 rounded touch-target-reset ${bl.dofollow ? 'bg-green-500/20 text-green-300' : 'bg-gray-500/20 text-gray-400'}`}>
@@ -503,7 +573,9 @@ export default function BacklinksPage() {
               {paginatedRefDomains.map((rd, i) => (
                 <div key={`${rd.domain}-${rd.source}-${i}`} className="rounded-xl border border-border bg-bg-darkest p-3.5">
                   <div className="flex items-center justify-between gap-2">
-                    <p className="text-sm font-medium text-fg truncate">{rd.domain}</p>
+                    <ExternalLink href={rd.domain} className="text-sm font-medium truncate" title={rd.domain}>
+                      {rd.domain}
+                    </ExternalLink>
                     <span className="text-[10px] px-1.5 py-0.5 rounded bg-accent/10 text-accent-light border border-accent/20">
                       {sourceLabel(rd.source)}
                     </span>
@@ -532,7 +604,11 @@ export default function BacklinksPage() {
                 <tbody>
                   {paginatedRefDomains.map((rd, i) => (
                     <tr key={`${rd.domain}-${rd.source}-${i}`} className="border-b border-border/50 hover:bg-white/[0.02]">
-                      <td className="py-2.5 px-3 text-fg font-medium">{rd.domain}</td>
+                      <td className="py-2.5 px-3 font-medium">
+                        <ExternalLink href={rd.domain} className="font-medium" title={rd.domain}>
+                          {rd.domain}
+                        </ExternalLink>
+                      </td>
                       <td className="py-2.5 px-3 text-right text-fg-muted">{rd.rank || '—'}</td>
                       <td className="py-2.5 px-3 text-right text-fg-muted">{rd.backlinks || '—'}</td>
                       <td className="py-2.5 px-3 text-right text-fg-muted">{rd.dofollow ?? '—'}</td>
