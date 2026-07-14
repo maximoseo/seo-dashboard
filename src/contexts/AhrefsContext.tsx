@@ -55,7 +55,7 @@ export function useAhrefs() {
 }
 
 export function AhrefsProvider({ children }: { children: ReactNode }) {
-  const { activeDomain, activeProject } = useProject()
+  const { activeDomain, activeProject, workspaceEpoch } = useProject()
   const target = activeDomain || activeProject?.domain || ''
   const market = activeProject?.market || null
   const [loading, setLoading] = useState(false)
@@ -130,7 +130,7 @@ export function AhrefsProvider({ children }: { children: ReactNode }) {
     return () => {
       cancelled = true
     }
-  }, [target, market])
+  }, [target, market, workspaceEpoch])
 
   const refresh = async () => {
     if (!target) return

@@ -11,6 +11,10 @@ import { useAhrefs } from '@/contexts/AhrefsContext'
 import { useBacklinksAgg, refreshBacklinks } from '@/api/client'
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts'
 import { exportToCSV, ExportCSVButton } from '@/lib/csvExport'
+import DomainIntegrityBar from '@/components/DomainIntegrityBar'
+import { canonicalizeDomain } from '@/lib/domain'
+import { filterBacklinkRowsForDomain } from '@/lib/dataIntegrity'
+import { useDomainSwitchCleanup } from '@/lib/useDomainQuery'
 
 interface Backlink {
   url_from?: string
@@ -95,6 +99,7 @@ function ExternalLink({
 export default function BacklinksPage() {
   const { domain } = useSEO()
   const { activeProject } = useProject()
+  useDomainSwitchCleanup(domain)
   const market = activeProject?.market || null
   const { domainRating, backlinksStats, loading: ahrefsLoading } = useAhrefs()
   const qc = useQueryClient()
@@ -209,8 +214,11 @@ export default function BacklinksPage() {
     }
   }, [backlinks, summary.relevant, summary.risky, summary.spam])
 
+  const backlinksIntegrity = useMemo(() => filterBacklinkRowsForDomain(backlinks, domain || ''), [backlinks, domain])
+  const domainSafeBacklinks = backlinksIntegrity.rows
+
   const filteredLinks = useMemo(() => {
-    let list = [...backlinks]
+    let list = [...domainSafeBacklinks]
     // Default view hides spam so operators see domain-relevant sources first
     if (qualityFilter === 'relevant') list = list.filter((bl) => (bl.quality || 'relevant') === 'relevant')
     if (qualityFilter === 'relevant_risky') list = list.filter((bl) => bl.quality !== 'spam')
@@ -231,7 +239,7 @@ export default function BacklinksPage() {
     // Prefer quality score when present
     list.sort((a, b) => (Number(b.qualityScore || b.rank || 0) - Number(a.qualityScore || a.rank || 0)))
     return list
-  }, [backlinks, filter, sourceFilter, search, qualityFilter])
+  }, [domainSafeBacklinks, filter, sourceFilter, search, qualityFilter])
 
   const filteredRefDomains = useMemo(() => {
     let list = [...refdomains]
@@ -306,7 +314,7 @@ export default function BacklinksPage() {
     setSyncing(true)
     try {
       const fresh = await refreshBacklinks(domain, market)
-      qc.setQueryData(['backlinks', domain, market?.trim() || ''], fresh)
+      qc.setQueryData(['backlinks', canonicalizeDomain(domain), market?.trim() || ''], fresh)
     } catch {
       // keep cache
     } finally {
@@ -356,6 +364,18 @@ export default function BacklinksPage() {
           ))}
         </div>
       </div>
+
+      <DomainIntegrityBar
+        activeDomain={domain}
+        payloadDomain={data?.canonicalDomain || data?.domain || domain}
+        dataState={data?.dataState}
+        fetchedAt={data?.fetchedAt || (dataUpdatedAt ? new Date(dataUpdatedAt).toISOString() : null)}
+        fromSnapshot={Boolean(data?.fromSnapshot)}
+        rowCount={domainSafeBacklinks.length}
+        foreignDropped={backlinksIntegrity.foreignDropped + Number(data?.integrity?.foreignRowsDropped || 0)}
+        selfDropped={backlinksIntegrity.selfDropped}
+        extra="spam hidden by default"
+      />
 
       {softDegraded.length > 0 && (
         <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 px-3.5 py-3 text-sm text-amber-100">

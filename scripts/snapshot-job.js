@@ -132,14 +132,38 @@ async function fetchProxy(jar, endpoint, params = {}, method = 'GET', body) {
   return { ok: true, status: res.status, data }
 }
 
+function sanitizeJsonForPg(value, depth = 0) {
+  if (depth > 40) return null
+  if (value == null) return value
+  if (typeof value === 'string') {
+    return value.replace(/\u0000/g, '').replace(/[\u0001-\u0008\u000B\u000C\u000E-\u001F]/g, '')
+  }
+  if (typeof value === 'number' || typeof value === 'boolean') return value
+  if (Array.isArray(value)) return value.map((v) => sanitizeJsonForPg(v, depth + 1))
+  if (typeof value === 'object') {
+    const out = {}
+    for (const [k, v] of Object.entries(value)) {
+      const key = String(k).replace(/\u0000/g, '').replace(/[\r\n]+/g, ' ').trim()
+      if (!key) continue
+      out[key] = sanitizeJsonForPg(v, depth + 1)
+    }
+    return out
+  }
+  return value
+}
+
 async function upsertSnapshot(domainId, provider, data) {
+  // PostgREST needs on_conflict columns + Prefer resolution=merge-duplicates or HTTP 409
+  // fires on existing (domain_id, provider, snapshot_date) unique rows.
+  // Also strip U+0000 (jsonb 22P05) that sometimes arrives from Exa / noisy HTML.
   const payload = {
     domain_id: domainId,
     provider,
     snapshot_date: today(),
-    data,
+    data: sanitizeJsonForPg(data),
+    fetched_at: new Date().toISOString(),
   }
-  return rest('/rest/v1/seo_snapshots', {
+  return rest('/rest/v1/seo_snapshots?on_conflict=domain_id,provider,snapshot_date', {
     method: 'POST',
     body: payload,
     prefer: 'resolution=merge-duplicates,return=representation',

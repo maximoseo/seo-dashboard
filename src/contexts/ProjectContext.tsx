@@ -1,5 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
+import { useQueryClient } from '@tanstack/react-query'
 import { fetchProjects } from '@/services/projectsApi'
 import type { ProjectListResponse, ProjectSummary } from '@/types/project'
 import {
@@ -9,6 +10,7 @@ import {
   legacyRouteToProjectModule,
   type ProjectModule,
 } from '@/lib/projectRoutes'
+import { canonicalizeDomain, domainsEqual } from '@/lib/domain'
 
 interface ProjectContextData {
   activeDomain: string
@@ -18,6 +20,7 @@ interface ProjectContextData {
   fetchedAt: string | null
   loading: boolean
   error: string | null
+  workspaceEpoch: number
   setActiveProject: (domain: string, options?: { preserveModule?: boolean; module?: ProjectModule | null }) => void
   refreshProjects: () => Promise<void>
 }
@@ -26,7 +29,8 @@ const ProjectContext = createContext<ProjectContextData | null>(null)
 
 function getStoredDomain(): string | null {
   try {
-    return localStorage.getItem('maximo:activeDomain')
+    const raw = localStorage.getItem('maximo:activeDomain')
+    return canonicalizeDomain(raw) || null
   } catch {
     return null
   }
@@ -34,7 +38,8 @@ function getStoredDomain(): string | null {
 
 function storeDomain(domain: string) {
   try {
-    localStorage.setItem('maximo:activeDomain', domain)
+    const clean = canonicalizeDomain(domain)
+    if (clean) localStorage.setItem('maximo:activeDomain', clean)
   } catch {
     // Ignore storage failures in private browsing or locked-down contexts.
   }
@@ -42,18 +47,44 @@ function storeDomain(domain: string) {
 
 function getQueryDomain(search: string): string | null {
   const value = new URLSearchParams(search).get('domain')
-  return value || null
+  return canonicalizeDomain(value) || null
 }
 
 export function ProjectProvider({ children }: { children: ReactNode }) {
   const location = useLocation()
   const navigate = useNavigate()
-  const initialDomain = getDomainFromProjectPathname(location.pathname) || getQueryDomain(location.search) || getStoredDomain() || ''
+  const queryClient = useQueryClient()
+  const initialDomain =
+    canonicalizeDomain(getDomainFromProjectPathname(location.pathname)) ||
+    getQueryDomain(location.search) ||
+    getStoredDomain() ||
+    ''
   const [activeDomain, setActiveDomain] = useState(initialDomain)
   const [projectList, setProjectList] = useState<ProjectListResponse | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [workspaceEpoch, setWorkspaceEpoch] = useState(0)
   const requestSeq = useRef(0)
+
+  const hardSwitchDomain = useCallback((nextRaw: string) => {
+    const next = canonicalizeDomain(nextRaw)
+    setActiveDomain((prev) => {
+      if (domainsEqual(prev, next)) return canonicalizeDomain(prev) || next
+      // Invalidate ALL module caches that don't belong to the new domain — prevent bleed.
+      queryClient.cancelQueries()
+      queryClient.removeQueries({
+        predicate: (q) => {
+          const key = q.queryKey as unknown[]
+          const keyDomain = typeof key[1] === 'string' ? canonicalizeDomain(String(key[1])) : ''
+          // Keep portfolio-level queries without domain slot; drop foreign domain slots.
+          return Boolean(keyDomain && keyDomain !== next)
+        },
+      })
+      setWorkspaceEpoch((e) => e + 1)
+      return next
+    })
+    if (next) storeDomain(next)
+  }, [queryClient])
 
   const refreshProjects = useCallback(async () => {
     const requestId = requestSeq.current + 1
@@ -81,61 +112,68 @@ export function ProjectProvider({ children }: { children: ReactNode }) {
   }, [refreshProjects])
 
   useEffect(() => {
-    const domainFromRoute = getDomainFromProjectPathname(location.pathname)
+    const domainFromRoute = canonicalizeDomain(getDomainFromProjectPathname(location.pathname))
     const domainFromQuery = getQueryDomain(location.search)
     const nextDomain = domainFromRoute || domainFromQuery
-    if (nextDomain && nextDomain !== activeDomain) {
-      setActiveDomain(nextDomain)
-      storeDomain(nextDomain)
+    if (nextDomain && !domainsEqual(nextDomain, activeDomain)) {
+      hardSwitchDomain(nextDomain)
     }
-  }, [activeDomain, location.pathname, location.search])
+  }, [activeDomain, hardSwitchDomain, location.pathname, location.search])
 
   const projects = projectList?.projects ?? []
 
-  // Prefer route domain → stored → first portfolio project. Never invent a domain
-  // that is not in the user's portfolio (e.g. maximo-seo.ai system stub).
+  // Prefer route domain → stored domain if it belongs to portfolio.
+  // NEVER silently fall back to projects[0] while a route/query domain intent exists.
+  // Only bootstrap first portfolio domain when nothing is selected yet (empty workspace).
   useEffect(() => {
     if (!projectList) return
-    const routeDomain = getDomainFromProjectPathname(location.pathname)
+    const routeDomain = canonicalizeDomain(getDomainFromProjectPathname(location.pathname))
     if (routeDomain) return
-    if (activeDomain && projects.some(p => (p.domain || '').toLowerCase() === activeDomain.toLowerCase())) {
+    if (activeDomain && projects.some(p => domainsEqual(p.domain, activeDomain))) {
       return
     }
-    const fallback = projects[0]?.domain
-    if (fallback) {
-      setActiveDomain(fallback)
-      storeDomain(fallback)
+    // If user has a stored domain not in portfolio, clear it — don't invent another site.
+    if (activeDomain && projects.length && !projects.some(p => domainsEqual(p.domain, activeDomain))) {
+      hardSwitchDomain('')
+      return
     }
-  }, [activeDomain, location.pathname, projectList, projects])
+    if (!activeDomain && projects[0]?.domain) {
+      hardSwitchDomain(projects[0].domain)
+    }
+  }, [activeDomain, hardSwitchDomain, location.pathname, projectList, projects])
 
   const activeProject = useMemo(() => {
     if (!activeDomain) return null
-    const needle = activeDomain.toLowerCase()
-    return projects.find(project => (project.domain || '').toLowerCase() === needle) ?? null
+    return projects.find(project => domainsEqual(project.domain, activeDomain)) ?? null
   }, [activeDomain, projects])
 
   const setActiveProject = useCallback((domain: string, options: { preserveModule?: boolean; module?: ProjectModule | null } = {}) => {
+    const clean = canonicalizeDomain(domain)
     const module = options.module !== undefined
       ? options.module
       : options.preserveModule
         ? getModuleFromPathname(location.pathname) || legacyRouteToProjectModule(location.pathname)
         : null
-    setActiveDomain(domain)
-    storeDomain(domain)
-    navigate(buildProjectPath(domain, module))
-  }, [location.pathname, navigate])
+    hardSwitchDomain(clean)
+    if (clean) navigate(buildProjectPath(clean, module))
+    else navigate('/projects')
+  }, [hardSwitchDomain, location.pathname, navigate])
 
   const value = useMemo<ProjectContextData>(() => ({
-    activeDomain: activeProject?.domain || activeDomain || projects[0]?.domain || '',
+    // Never fall through to projects[0] when activeDomain intentionally empty.
+    activeDomain: activeProject?.domain
+      ? canonicalizeDomain(activeProject.domain)
+      : canonicalizeDomain(activeDomain),
     activeProject,
     projects,
     source: projectList?.source ?? null,
     fetchedAt: projectList?.fetchedAt ?? null,
     loading,
     error,
+    workspaceEpoch,
     setActiveProject,
     refreshProjects,
-  }), [activeDomain, activeProject, error, loading, projectList?.fetchedAt, projectList?.source, projects, refreshProjects, setActiveProject])
+  }), [activeDomain, activeProject, error, loading, projectList?.fetchedAt, projectList?.source, projects, refreshProjects, setActiveProject, workspaceEpoch])
 
   return <ProjectContext.Provider value={value}>{children}</ProjectContext.Provider>
 }

@@ -10,6 +10,10 @@ import { useSEO } from '@/contexts/SEOContext'
 import { useProject } from '@/contexts/ProjectContext'
 import { authFetch } from '@/lib/authToken'
 import { refreshCompetitors } from '@/api/client'
+import DomainIntegrityBar from '@/components/DomainIntegrityBar'
+import { canonicalizeDomain } from '@/lib/domain'
+import { filterCompetitorRowsForDomain } from '@/lib/dataIntegrity'
+import { useDomainSwitchCleanup } from '@/lib/useDomainQuery'
 
 interface Competitor {
   domain: string
@@ -127,19 +131,26 @@ function normalizeCompetitors(data: any): Competitor[] {
 export default function CompetitorsPage() {
   const { domain } = useSEO()
   const { activeProject } = useProject()
+  useDomainSwitchCleanup(domain)
   const projectMarket = activeProject?.market || null
   const qc = useQueryClient()
   const { pageSize, setPageSize } = usePageSize('competitors')
   const [page, setPage] = useState(1)
   const [syncing, setSyncing] = useState(false)
   const { data, isLoading, error, isFetching } = useQuery({
-    queryKey: ['competitors', domain, projectMarket],
-    queryFn: () => fetchCompetitors(domain, projectMarket),
+    queryKey: ['competitors', canonicalizeDomain(domain), projectMarket],
+    queryFn: () => fetchCompetitors(canonicalizeDomain(domain), projectMarket),
+    enabled: !!canonicalizeDomain(domain),
     staleTime: 10 * 60 * 1000,
     retry: 1,
   })
 
-  const competitors = useMemo(() => normalizeCompetitors(data), [data])
+  const competitorsRaw = useMemo(() => normalizeCompetitors(data), [data])
+  const competitorsIntegrity = useMemo(
+    () => filterCompetitorRowsForDomain(competitorsRaw, domain || ''),
+    [competitorsRaw, domain],
+  )
+  const competitors = competitorsIntegrity.rows
   const activeSources = data?.activeSources || []
   const gaps = Array.isArray(data?.gaps) ? data.gaps : []
   const softDegraded = Array.isArray(data?.softDegraded) ? data.softDegraded : []
@@ -166,7 +177,7 @@ export default function CompetitorsPage() {
     setSyncing(true)
     try {
       const fresh = await refreshCompetitors(domain, projectMarket)
-      qc.setQueryData(['competitors', domain, projectMarket], fresh)
+      qc.setQueryData(['competitors', canonicalizeDomain(domain), projectMarket], fresh)
     } catch {
       // keep cache
     } finally {
@@ -221,6 +232,17 @@ export default function CompetitorsPage() {
           ))}
         </div>
       )}
+
+      <DomainIntegrityBar
+        activeDomain={domain}
+        payloadDomain={data?.canonicalDomain || data?.domain || domain}
+        dataState={data?.dataState}
+        fetchedAt={data?.fetchedAt}
+        fromSnapshot={Boolean(data?.fromSnapshot)}
+        rowCount={competitors.length}
+        giantsDropped={competitorsIntegrity.giantsDropped + Number(data?.integrity?.giantsDropped || 0)}
+        selfDropped={competitorsIntegrity.selfDropped}
+      />
 
       {gaps.length > 0 && (
         <DataCard title="Competitor gap estimates" dataState={dataState as any} fetchedAt={data?.fetchedAt}>

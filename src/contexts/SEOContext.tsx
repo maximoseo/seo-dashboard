@@ -1,6 +1,7 @@
 import { createContext, useContext, useEffect, useState, useCallback, type ReactNode } from 'react'
 import { fetchOverview, fetchApiHealth, type OverviewData, type ApiHealthStatus } from '@/services/seoApi'
 import { useProject } from '@/contexts/ProjectContext'
+import { canonicalizeDomain } from '@/lib/domain'
 
 interface SEOContextData {
   domain: string
@@ -31,15 +32,21 @@ export function useSEO() {
 }
 
 export function SEOProvider({ children }: { children: ReactNode }) {
-  const { activeDomain, activeProject, setActiveProject } = useProject()
+  const { activeDomain, activeProject, setActiveProject, workspaceEpoch } = useProject()
   // Bound to the open project / portfolio domain — never invent a stub domain.
-  const domain = activeDomain || activeProject?.domain || ''
+  const domain = canonicalizeDomain(activeDomain || activeProject?.domain || '')
   const market = activeProject?.market || null
   const [overview, setOverview] = useState<OverviewData | null>(null)
   const [overviewLoading, setOverviewLoading] = useState(false)
   const [overviewError, setOverviewError] = useState<string | null>(null)
   const [apiHealth, setApiHealth] = useState<ApiHealthStatus | null>(null)
   const [healthLoading, setHealthLoading] = useState(false)
+
+  // Hard reset overview when domain/workspace changes — prevent painting previous site KPIs
+  useEffect(() => {
+    setOverview(null)
+    setOverviewError(null)
+  }, [domain, workspaceEpoch])
 
   const loadOverview = useCallback(async () => {
     if (!domain) {
@@ -52,6 +59,13 @@ export function SEOProvider({ children }: { children: ReactNode }) {
     setOverviewError(null)
     try {
       const data = await fetchOverview(domain, market)
+      // Drop late responses for a previous domain
+      const claimed = canonicalizeDomain((data as any)?.domain)
+      if (claimed && claimed !== domain) {
+        setOverview(null)
+        setOverviewError(`Overview domain mismatch (${claimed})`)
+        return
+      }
       setOverview(data)
     } catch (e) {
       setOverviewError(e instanceof Error ? e.message : 'Failed to load overview')

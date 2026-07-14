@@ -52,6 +52,7 @@ import {
   mergeKeywordRows,
   type KeywordRow,
 } from './providers/adapters.js'
+import { acceptSnapshotForDomain, canonicalizeDomain, filterCompetitorsForDomain, filterKeywordsForDomain, filterPagesForDomain, stampPayload } from './providers/domainIntegrity.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
@@ -650,7 +651,8 @@ function marketFromRequest(req: { query?: any; body?: any }, domain?: string | n
 
 async function findDomainId(domain: string): Promise<string | null> {
   if (!supabaseAdmin) return null
-  const clean = String(domain || '').replace(/^https?:\/\//, '').replace(/\/$/, '').replace(/^www\./, '')
+  const clean = canonicalizeDomain(domain)
+  if (!clean) return null
   const { data } = await supabaseAdmin
     .from('seo_domains')
     .select('id, domain')
@@ -673,7 +675,9 @@ async function loadSnapshotPayload(domain: string, provider: string): Promise<{ 
     .limit(1)
     .maybeSingle()
   if (!data?.data) return null
-  return { data: data.data, fetchedAt: data.fetched_at || null }
+  const accepted = acceptSnapshotForDomain({ data: data.data, fetchedAt: data.fetched_at || null }, domain)
+  if (!accepted) return null
+  return { data: accepted.data, fetchedAt: data.fetched_at || null }
 }
 
 async function persistSnapshot(
@@ -695,8 +699,12 @@ async function persistSnapshot(
   const domainId = await findDomainId(domain)
   if (!domainId) return { ok: false, skipped: true, error: 'domain-not-found' }
   const today = new Date().toISOString().slice(0, 10)
+  // Always stamp domain identity into durable snapshots
+  const stamped = (payload && typeof payload === 'object')
+    ? stampPayload(payload as Record<string, any>, domain)
+    : payload
   // PostgREST/jsonb rejects U+0000 (code 22P05). Exa/html fragments sometimes include them.
-  const cleanPayload = sanitizeJsonForPg(payload)
+  const cleanPayload = sanitizeJsonForPg(stamped)
   const { error } = await supabaseAdmin.from('seo_snapshots').upsert(
     {
       domain_id: domainId,
@@ -1434,12 +1442,19 @@ app.get('/api/overview', expensiveLimiter, async (req, res) => {
 // Aggregated keywords from multiple sources
 app.get('/api/keywords/aggregated', expensiveLimiter, async (req, res) => {
   const { domain, limit, refresh } = req.query as Record<string, string>
+  if (!domain?.trim()) return res.status(400).json({ error: 'domain required' })
   const pack = marketFromRequest(req, domain)
   const forceRefresh = refresh === '1' || refresh === 'true'
   if (!forceRefresh) {
     const cached = await loadSnapshotPayload(domain, 'keywords_agg')
     if (cached?.data && Object.keys(cached.data.sources || {}).length > 0) {
-      return res.json({ ...cached.data, domain, market: pack, dataState: 'cached', fetchedAt: cached.fetchedAt, fromSnapshot: true })
+      const snap = { ...cached.data, market: pack, dataState: 'cached', fetchedAt: cached.fetchedAt, fromSnapshot: true }
+      if (Array.isArray(snap.normalized)) {
+        const kwIntegrity = filterKeywordsForDomain(snap.normalized, domain)
+        snap.normalized = kwIntegrity.rows
+        return res.json(stampPayload(snap, domain, { foreignRowsDropped: kwIntegrity.foreignRowsDropped }))
+      }
+      return res.json(stampPayload(snap, domain))
     }
   }
 
@@ -1558,11 +1573,17 @@ app.get('/api/keywords/aggregated', expensiveLimiter, async (req, res) => {
     }
   }
 
-  result.normalized = keywords
-  result.movements = keywordMovements(keywords)
+  const kwIntegrity = filterKeywordsForDomain(keywords, domain)
+  result.normalized = kwIntegrity.rows
+  result.movements = keywordMovements(kwIntegrity.rows)
+  const stamped = stampPayload(result, domain, {
+    foreignRowsDropped: kwIntegrity.foreignRowsDropped,
+    selfRowsDropped: 0,
+    giantsDropped: 0,
+  })
 
-  if (result.activeSources.length) void persistSnapshot(domain, 'keywords_agg', result)
-  res.json(result)
+  if (stamped.activeSources.length) void persistSnapshot(domain, 'keywords_agg', stamped)
+  res.json(stamped)
 })
 
 // Aggregated backlinks from multiple sources (Ahrefs + SEMrush + DataForSEO + SE Ranking + Serpstat)
@@ -2331,8 +2352,13 @@ app.get('/api/backlinks/aggregated', expensiveLimiter, async (req, res) => {
   }
 
   if (!result.normalized.length && !result.refdomains.length && !result.activeSources.length) result.dataState = 'unavailable'
-  if (result.activeSources.length || result.normalized.length || result.refdomains.length) void persistSnapshot(domain, 'backlinks_agg', result)
-  res.json(result)
+  const stampedBacklinks = stampPayload(result, domain, {
+    foreignRowsDropped: Number(result.summary?.droppedWrongTarget || 0) || 0,
+  })
+  if (stampedBacklinks.activeSources.length || stampedBacklinks.normalized.length || stampedBacklinks.refdomains?.length) {
+    void persistSnapshot(domain, 'backlinks_agg', stampedBacklinks)
+  }
+  res.json(stampedBacklinks)
 })
 
 // Aggregated top pages — SEMrush domain_organic_unique + DataForSEO relevant_pages + keyword URL rollup
@@ -2346,7 +2372,13 @@ app.get('/api/pages/aggregated', expensiveLimiter, async (req, res) => {
   if (!forceRefresh) {
     const cached = await loadSnapshotPayload(domain, 'pages_agg')
     if (cached?.data && (Array.isArray(cached.data.normalized) ? cached.data.normalized.length > 0 : Object.keys(cached.data.sources || {}).length > 0)) {
-      return res.json({ ...cached.data, domain, market: pack, dataState: 'cached', fetchedAt: cached.fetchedAt, fromSnapshot: true })
+      const snap = { ...cached.data, market: pack, dataState: 'cached', fetchedAt: cached.fetchedAt, fromSnapshot: true }
+      if (Array.isArray(snap.normalized)) {
+        const pageIntegrity = filterPagesForDomain(snap.normalized, domain)
+        snap.normalized = pageIntegrity.rows
+        return res.json(stampPayload(snap, domain, { foreignRowsDropped: pageIntegrity.foreignRowsDropped }))
+      }
+      return res.json(stampPayload(snap, domain))
     }
   }
 
@@ -2619,19 +2651,21 @@ app.get('/api/pages/aggregated', expensiveLimiter, async (req, res) => {
     }))
     .sort((a, b) => (b.traffic - a.traffic) || (b.keywords - a.keywords) || (b.backlinks - a.backlinks))
 
-  result.normalized = normalized
+  const pageIntegrity = filterPagesForDomain(normalized, domain)
+  result.normalized = pageIntegrity.rows
   result.summary = {
-    total: normalized.length,
-    healthy: normalized.filter((p) => p.status >= 200 && p.status < 300).length,
-    redirects: normalized.filter((p) => p.status >= 300 && p.status < 400).length,
-    errors: normalized.filter((p) => p.status >= 400).length,
-    withTraffic: normalized.filter((p) => p.traffic > 0).length,
-    withOnpage: normalized.filter((p) => (p.wordCount > 0 || (p as any).h1 || (Array.isArray((p as any).onpageIssues) && (p as any).onpageIssues.length))).length,
+    total: pageIntegrity.rows.length,
+    healthy: pageIntegrity.rows.filter((p) => p.status >= 200 && p.status < 300).length,
+    redirects: pageIntegrity.rows.filter((p) => p.status >= 300 && p.status < 400).length,
+    errors: pageIntegrity.rows.filter((p) => p.status >= 400).length,
+    withTraffic: pageIntegrity.rows.filter((p) => p.traffic > 0).length,
+    withOnpage: pageIntegrity.rows.filter((p) => (p.wordCount > 0 || (p as any).h1 || (Array.isArray((p as any).onpageIssues) && (p as any).onpageIssues.length))).length,
   }
+  const stampedPages = stampPayload(result, domain, { foreignRowsDropped: pageIntegrity.foreignRowsDropped })
 
-  if (result.activeSources.length || normalized.length) void persistSnapshot(domain, 'pages_agg', result)
-  if (!normalized.length && !result.activeSources.length) result.dataState = 'unavailable'
-  res.json(result)
+  if (stampedPages.activeSources.length || pageIntegrity.rows.length) void persistSnapshot(domain, 'pages_agg', stampedPages)
+  if (!pageIntegrity.rows.length && !stampedPages.activeSources.length) stampedPages.dataState = 'unavailable'
+  res.json(stampedPages)
 })
 
 // Aggregated technical site audit — DataForSEO On-Page + PageSpeed SEO + backlink risk signals
@@ -3012,8 +3046,11 @@ app.get('/api/site-audit/aggregated', expensiveLimiter, async (req, res) => {
   result.issues.sort((a: any, b: any) => (sevRank[a.severity] ?? 9) - (sevRank[b.severity] ?? 9))
 
   if (!result.activeSources.length && !result.issues.length && !result.pages.length) result.dataState = 'unavailable'
-  if (result.activeSources.length || result.issues.length || result.pages.length) void persistSnapshot(domain, 'site_audit_agg', result)
-  res.json(result)
+  const stampedAudit = stampPayload(result, domain)
+  if (stampedAudit.activeSources.length || stampedAudit.issues.length || stampedAudit.pages.length) {
+    void persistSnapshot(domain, 'site_audit_agg', stampedAudit)
+  }
+  res.json(stampedAudit)
 })
 
 // Aggregated vitals from multiple sources
@@ -3050,12 +3087,22 @@ app.post('/api/vitals/aggregated', expensiveLimiter, async (req, res) => {
 // Aggregated competitors from multiple sources
 app.get('/api/competitors/aggregated', expensiveLimiter, async (req, res) => {
   const { domain, refresh } = req.query as Record<string, string>
+  if (!domain?.trim()) return res.status(400).json({ error: 'domain required' })
   const pack = marketFromRequest(req, domain)
   const forceRefresh = refresh === '1' || refresh === 'true'
   if (!forceRefresh) {
     const cached = await loadSnapshotPayload(domain, 'competitors_agg')
     if (cached?.data && Object.keys(cached.data.sources || {}).length > 0) {
-      return res.json({ ...cached.data, domain, market: pack, dataState: 'cached', fetchedAt: cached.fetchedAt, fromSnapshot: true })
+      const snap = { ...cached.data, market: pack, dataState: 'cached', fetchedAt: cached.fetchedAt, fromSnapshot: true }
+      if (Array.isArray(snap.normalized)) {
+        const compIntegrity = filterCompetitorsForDomain(snap.normalized, domain)
+        snap.normalized = compIntegrity.rows
+        return res.json(stampPayload(snap, domain, {
+          giantsDropped: compIntegrity.giantsDropped,
+          selfRowsDropped: compIntegrity.selfRowsDropped,
+        }))
+      }
+      return res.json(stampPayload(snap, domain))
     }
   }
 
@@ -3133,7 +3180,8 @@ app.get('/api/competitors/aggregated', expensiveLimiter, async (req, res) => {
     competitorsFromExa(result.sources.exa),
     competitorsFromSerpstat(result.sources.serpstat),
   ])
-  result.normalized = competitors
+  const compIntegrity = filterCompetitorsForDomain(competitors, domain)
+  result.normalized = compIntegrity.rows
 
   // Prefer keyword inventory from keywords snapshot when available for better gap estimates
   let ourKeywords: KeywordRow[] = []
@@ -3145,10 +3193,14 @@ app.get('/api/competitors/aggregated', expensiveLimiter, async (req, res) => {
   } catch {
     ourKeywords = []
   }
-  result.gaps = computeCompetitorGaps(ourKeywords, competitors)
+  result.gaps = computeCompetitorGaps(ourKeywords, compIntegrity.rows)
+  const stampedCompetitors = stampPayload(result, domain, {
+    giantsDropped: compIntegrity.giantsDropped,
+    selfRowsDropped: compIntegrity.selfRowsDropped,
+  })
 
-  if (result.activeSources.length) void persistSnapshot(domain, 'competitors_agg', result)
-  res.json(result)
+  if (stampedCompetitors.activeSources.length) void persistSnapshot(domain, 'competitors_agg', stampedCompetitors)
+  res.json(stampedCompetitors)
 })
 
 // Content analysis — Exa competitive content + Thorbit

@@ -5,11 +5,15 @@ import { useKeywords, refreshKeywords } from '../api/client'
 import { useSEO } from '@/contexts/SEOContext'
 import { useProject } from '@/contexts/ProjectContext'
 import DataStateBadge from '@/components/DataStateBadge'
+import DomainIntegrityBar from '@/components/DomainIntegrityBar'
 import PageSizeSelect from '@/components/PageSizeSelect'
 import SyncButton from '@/components/SyncButton'
 import { usePageSize } from '@/hooks/usePageSize'
 import { normalizeSemrushKeywords, normalizeAhrefsKeywords, normalizeDataForSEOKeywords, formatMetric } from '../api/normalize'
 import { exportToCSV, ExportCSVButton } from '@/lib/csvExport'
+import { canonicalizeDomain } from '@/lib/domain'
+import { filterKeywordRowsForDomain } from '@/lib/dataIntegrity'
+import { useDomainSwitchCleanup } from '@/lib/useDomainQuery'
 
 type SortDir = 'asc' | 'desc'
 type SortKey = 'keyword' | 'volume' | 'position' | 'difficulty' | 'cpc' | 'traffic'
@@ -80,6 +84,7 @@ export default function KeywordsPage() {
 
   const { domain } = useSEO()
   const { activeProject } = useProject()
+  useDomainSwitchCleanup(domain)
   const projectMarket = activeProject?.market || null
   const { data: apiData, isLoading, error, dataUpdatedAt, isFetching } = useKeywords(domain, projectMarket)
 
@@ -88,7 +93,7 @@ export default function KeywordsPage() {
     setSyncing(true)
     try {
       const fresh = await refreshKeywords(domain, projectMarket)
-      qc.setQueryData(['keywords', domain, projectMarket?.trim() || ''], fresh)
+      qc.setQueryData(['keywords', canonicalizeDomain(domain), projectMarket?.trim() || ''], fresh)
     } catch {
       // keep existing cache on network fail
     } finally {
@@ -179,7 +184,11 @@ export default function KeywordsPage() {
     }
     
     return result
-  }, [apiData])
+    // Client-side host whitelist — never paint foreign URLs for another site
+  }, [apiData, domain])
+
+  const keywordsIntegrity = useMemo(() => filterKeywordRowsForDomain(keywords, domain || ''), [keywords, domain])
+  const safeKeywords = keywordsIntegrity.rows
 
   const movements = apiData?.movements || null
   const activeSources: string[] = Array.isArray(apiData?.activeSources) ? apiData.activeSources : []
@@ -192,7 +201,7 @@ export default function KeywordsPage() {
       : null
 
   const filtered = useMemo(() => {
-    let data = [...keywords]
+    let data = [...safeKeywords]
     if (search) data = data.filter(k => k.keyword.toLowerCase().includes(search.toLowerCase()))
     if (posFilter !== 'all') {
       const ranges: Record<string, [number, number]> = { top3: [1,3], top10: [1,10], top50: [1,50], '51-100': [51,100] }
@@ -207,7 +216,7 @@ export default function KeywordsPage() {
       return sortDir === 'asc' ? (av as number) - (bv as number) : (bv as number) - (av as number)
     })
     return data
-  }, [search, posFilter, intentFilter, sortKey, sortDir, keywords])
+  }, [search, posFilter, intentFilter, sortKey, sortDir, safeKeywords])
 
   const totalPages = Math.max(1, Math.ceil(filtered.length / pageSize))
   const paginated = filtered.slice((page - 1) * pageSize, page * pageSize)
@@ -218,8 +227,8 @@ export default function KeywordsPage() {
   }
 
   const handleExport = () => {
-    const headers = ['Keyword', 'Volume', 'Position', 'Change', 'Difficulty', 'CPC', 'Intent', 'URL']
-    const rows = filtered.map(k => [k.keyword, k.volume, k.position, k.change, k.difficulty, k.cpc, k.intent, k.url])
+    const headers = ['Keyword', 'Volume', 'Position', 'Change', 'Difficulty', 'CPC', 'Intent', 'URL', 'Domain']
+    const rows = filtered.map(k => [k.keyword, k.volume, k.position, k.change, k.difficulty, k.cpc, k.intent, k.url, domain || ''])
     exportToCSV(headers, rows, `keywords-${domain}-${new Date().toISOString().slice(0,10)}`)
   }
 
@@ -230,10 +239,10 @@ export default function KeywordsPage() {
   )
 
   const summaryCards = [
-    { label: 'Total Keywords', value: formatMetric(keywords.length), change: '—', color: 'text-blue' },
-    { label: 'Top 3', value: keywords.filter(k => k.position <= 3).length.toString(), change: '—', color: 'text-green' },
-    { label: 'Top 10', value: keywords.filter(k => k.position <= 10).length.toString(), change: '—', color: 'text-green' },
-    { label: 'Top 50', value: keywords.filter(k => k.position <= 50).length.toString(), change: '—', color: 'text-green' },
+    { label: 'Total Keywords', value: formatMetric(safeKeywords.length), change: '—', color: 'text-blue' },
+    { label: 'Top 3', value: safeKeywords.filter(k => k.position <= 3).length.toString(), change: '—', color: 'text-green' },
+    { label: 'Top 10', value: safeKeywords.filter(k => k.position <= 10).length.toString(), change: '—', color: 'text-green' },
+    { label: 'Top 50', value: safeKeywords.filter(k => k.position <= 50).length.toString(), change: '—', color: 'text-green' },
   ]
 
   return (
@@ -248,7 +257,7 @@ export default function KeywordsPage() {
           <ExportCSVButton onClick={handleExport} />
           <SyncButton onClick={handleForceSync} loading={syncing || isFetching} label="Force refresh" loadingLabel="Syncing…" />
           <DataStateBadge
-            state={error ? 'unavailable' : keywords.length > 0 ? (apiData?.dataState === 'cached' ? 'cached' : 'live') : isLoading ? 'loading' : 'unavailable'}
+            state={error ? 'unavailable' : safeKeywords.length > 0 ? (apiData?.dataState === 'cached' ? 'cached' : 'live') : isLoading ? 'loading' : 'unavailable'}
             source={activeSources.join(', ') || domain}
             fetchedAt={apiData?.fetchedAt || (dataUpdatedAt ? new Date(dataUpdatedAt).toISOString() : null)}
           />
@@ -263,6 +272,17 @@ export default function KeywordsPage() {
           ))}
         </div>
       </div>
+
+      <DomainIntegrityBar
+        activeDomain={domain}
+        payloadDomain={apiData?.canonicalDomain || apiData?.domain || domain}
+        dataState={apiData?.dataState}
+        fetchedAt={apiData?.fetchedAt || (dataUpdatedAt ? new Date(dataUpdatedAt).toISOString() : null)}
+        fromSnapshot={Boolean(apiData?.fromSnapshot)}
+        rowCount={safeKeywords.length}
+        foreignDropped={keywordsIntegrity.foreignDropped + Number(apiData?.integrity?.foreignRowsDropped || 0)}
+        extra={`for ${domain || '—'}`}
+      />
 
       {softDegraded.length > 0 && (
         <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 px-3.5 py-3 text-sm text-amber-100">

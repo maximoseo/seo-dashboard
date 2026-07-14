@@ -7,7 +7,11 @@ import { useProject } from '@/contexts/ProjectContext'
 import DataStateBadge from '@/components/DataStateBadge'
 import PageSizeSelect from '@/components/PageSizeSelect'
 import SyncButton from '@/components/SyncButton'
+import DomainIntegrityBar from '@/components/DomainIntegrityBar'
 import { usePageSize } from '@/hooks/usePageSize'
+import { canonicalizeDomain } from '@/lib/domain'
+import { filterPageRowsForDomain } from '@/lib/dataIntegrity'
+import { useDomainSwitchCleanup } from '@/lib/useDomainQuery'
 
 interface PageRow {
   url: string
@@ -42,6 +46,7 @@ function getScoreColor(score: number) {
 export default function PagesPage() {
   const { domain } = useSEO()
   const { activeProject } = useProject()
+  useDomainSwitchCleanup(domain)
   const market = activeProject?.market || null
   const qc = useQueryClient()
   const { data: apiData, isLoading, error, dataUpdatedAt, isFetching } = usePages(domain, market)
@@ -75,8 +80,11 @@ export default function PagesPage() {
     return []
   }, [apiData])
 
+  const pagesIntegrity = useMemo(() => filterPageRowsForDomain(pages, domain || ''), [pages, domain])
+  const safePages = pagesIntegrity.rows
+
   const filtered = useMemo(() => {
-    let list = [...pages]
+    let list = [...safePages]
     if (search) {
       const q = search.toLowerCase()
       list = list.filter((p) => p.url.toLowerCase().includes(q) || p.title.toLowerCase().includes(q))
@@ -85,17 +93,17 @@ export default function PagesPage() {
     if (statusFilter === 'redirect') list = list.filter((p) => p.status >= 300 && p.status < 400)
     if (statusFilter === 'error') list = list.filter((p) => p.status >= 400)
     return list
-  }, [pages, search, statusFilter])
+  }, [safePages, search, statusFilter])
 
   const totalPages = Math.max(1, Math.ceil(filtered.length / pageSize))
   const paginated = filtered.slice((page - 1) * pageSize, page * pageSize)
 
   const summary = apiData?.summary || {
-    total: pages.length,
-    healthy: pages.filter((p) => p.status >= 200 && p.status < 300).length,
-    redirects: pages.filter((p) => p.status >= 300 && p.status < 400).length,
-    errors: pages.filter((p) => p.status >= 400).length,
-    withTraffic: pages.filter((p) => p.traffic > 0).length,
+    total: safePages.length,
+    healthy: safePages.filter((p) => p.status >= 200 && p.status < 300).length,
+    redirects: safePages.filter((p) => p.status >= 300 && p.status < 400).length,
+    errors: safePages.filter((p) => p.status >= 400).length,
+    withTraffic: safePages.filter((p) => p.traffic > 0).length,
   }
 
   const activeSources: string[] = apiData?.activeSources || []
@@ -104,7 +112,7 @@ export default function PagesPage() {
     ? 'unavailable'
     : isLoading
       ? 'loading'
-      : pages.length
+      : safePages.length
         ? apiData?.dataState === 'cached'
           ? 'cached'
           : 'live'
@@ -115,7 +123,7 @@ export default function PagesPage() {
     setSyncing(true)
     try {
       const fresh = await refreshPages(domain, market)
-      qc.setQueryData(['pages', domain, market?.trim() || ''], fresh)
+      qc.setQueryData(['pages', canonicalizeDomain(domain), market?.trim() || ''], fresh)
     } catch {
       // keep existing cache; user sees badge still
     } finally {
@@ -125,8 +133,8 @@ export default function PagesPage() {
 
   const cards = [
     { label: 'Top pages', value: summary.total, color: 'text-fg' },
-    { label: 'With traffic', value: summary.withTraffic ?? pages.filter((p) => p.traffic > 0).length, color: 'text-green' },
-    { label: 'With on-page', value: summary.withOnpage ?? pages.filter((p) => p.wordCount > 0 || p.h1 || (p.onpageIssues?.length || 0) > 0).length, color: 'text-accent-light' },
+    { label: 'With traffic', value: summary.withTraffic ?? safePages.filter((p) => p.traffic > 0).length, color: 'text-green' },
+    { label: 'With on-page', value: summary.withOnpage ?? safePages.filter((p) => p.wordCount > 0 || p.h1 || (p.onpageIssues?.length || 0) > 0).length, color: 'text-accent-light' },
     { label: 'Redirects', value: summary.redirects, color: 'text-yellow' },
     { label: 'Errors', value: summary.errors, color: 'text-red' },
   ]
@@ -159,6 +167,16 @@ export default function PagesPage() {
           ))}
         </div>
       </div>
+
+      <DomainIntegrityBar
+        activeDomain={domain}
+        payloadDomain={apiData?.canonicalDomain || apiData?.domain || domain}
+        dataState={apiData?.dataState}
+        fetchedAt={apiData?.fetchedAt || (dataUpdatedAt ? new Date(dataUpdatedAt).toISOString() : null)}
+        fromSnapshot={Boolean(apiData?.fromSnapshot)}
+        rowCount={safePages.length}
+        foreignDropped={pagesIntegrity.foreignDropped + Number(apiData?.integrity?.foreignRowsDropped || 0)}
+      />
 
       {softDegraded.length > 0 && (
         <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 px-3.5 py-3 text-sm text-amber-100">
@@ -235,7 +253,7 @@ export default function PagesPage() {
           </div>
         )}
 
-        {!isLoading && error && !pages.length && (
+        {!isLoading && error && !safePages.length && (
           <div className="text-center py-10 px-4">
             <p className="text-sm text-red-300">Failed to load pages</p>
             <p className="text-xs text-fg-dim mt-1">{error instanceof Error ? error.message : 'API unavailable'}</p>
@@ -245,7 +263,7 @@ export default function PagesPage() {
           </div>
         )}
 
-        {!isLoading && !error && pages.length === 0 && (
+        {!isLoading && !error && safePages.length === 0 && (
           <div className="text-center py-10 px-4">
             <p className="text-sm text-fg-muted">No page inventory yet for {domain}</p>
             <p className="text-xs text-fg-dim mt-1">Run Keyword sync first (for URL rollup) or Force refresh to pull SEMrush / DataForSEO pages</p>
