@@ -1566,6 +1566,156 @@ app.get('/api/keywords/aggregated', expensiveLimiter, async (req, res) => {
 })
 
 // Aggregated backlinks from multiple sources (Ahrefs + SEMrush + DataForSEO + SE Ranking + Serpstat)
+
+/** Host root form of a URL/domain without www. */
+function backlinkHostOf(raw: string): string {
+  try {
+    const withScheme = /^https?:\/\//i.test(raw) ? raw : `https://${raw}`
+    return new URL(withScheme).hostname.replace(/^www\./, '').toLowerCase()
+  } catch {
+    return String(raw || '').replace(/^https?:\/\//, '').replace(/^www\./, '').split('/')[0].toLowerCase()
+  }
+}
+
+function backlinkTargetsDomain(urlTo: string, cleanDomain: string): boolean {
+  if (!urlTo || !cleanDomain) return false
+  const h = backlinkHostOf(urlTo)
+  return h === cleanDomain || h.endsWith(`.${cleanDomain}`)
+}
+
+const BACKLINK_SPAM_HOST_HINTS = [
+  'exlinko', 'seoflx', 'rank-your', 'itxoft', 'fiverr', 'thehighrankseo', 'seoexpress',
+  'kmoshops', 'seorankinghigh', '123webshop', 'rankingseohigh', 'thetoprankingseo',
+  'simplywebshop', 'kawaiishop', 'therankingseohigh', 'thebacklink', 'thehighseoranking',
+  'highseo', 'mysky-shop', 'activeshop', 'buybacklink', 'guestpost', 'link-exchange',
+  'pbn', 'cheap-backlinks', 'backlink-service', 'seoshop', 'rankboost',
+]
+const BACKLINK_SPAM_TLDS = new Set(['.shop', '.store', '.sbs', '.cfd', '.zip', '.mov', '.top', '.xyz', '.icu', '.buzz', '.bond', ' .cyou'.trim(), '.cyou'])
+const BACKLINK_SPAM_ANCHOR_HINTS = [
+  'fiverr', 'rank website', 'seo boost', 'guest post service', 'buy backlink', 'pbn',
+  'unstoppable growth', 'there was a time when', 'after launching', 'your unstoppable',
+]
+
+/** Score and classify a single backlink row for operator quality views. Never invent metrics. */
+function scoreBacklinkRow(row: any, cleanDomain: string): {
+  score: number
+  quality: 'relevant' | 'risky' | 'spam'
+  reasons: string[]
+  domain_from: string
+  url_to: string
+} {
+  const domainFrom = backlinkHostOf(row.domain_from || row.url_from || '')
+  const anchor = String(row.anchor || '').toLowerCase()
+  const urlFrom = String(row.url_from || '').toLowerCase()
+  let urlTo = String(row.url_to || '')
+  if (!urlTo) urlTo = `https://${cleanDomain}/`
+  const reasons: string[] = []
+  let score = Number(row.rank || 0) || 0
+  const tld = domainFrom.includes('.') ? `.${domainFrom.split('.').pop()}` : ''
+  if (BACKLINK_SPAM_TLDS.has(tld)) { score -= 40; reasons.push(`tld${tld}`) }
+  if (BACKLINK_SPAM_HOST_HINTS.some((h) => domainFrom.includes(h))) { score -= 50; reasons.push('spam-host') }
+  if (BACKLINK_SPAM_ANCHOR_HINTS.some((h) => anchor.includes(h))) { score -= 30; reasons.push('spam-anchor') }
+  if (urlFrom.includes('fiverr') || urlFrom.includes('rank-your') || urlFrom.includes('exlinko')) {
+    score -= 40; reasons.push('spam-url')
+  }
+  if (domainFrom.endsWith('.co.il') || domainFrom.endsWith('.org.il') || domainFrom.endsWith('.ac.il') || domainFrom.endsWith('.gov.il')) {
+    score += 18; reasons.push('local-tld')
+  }
+  const brandStem = cleanDomain.replace(/\..*$/, '')
+  if (brandStem && (anchor.includes(brandStem) || anchor.includes(cleanDomain))) {
+    score += 12; reasons.push('brand-anchor')
+  }
+  if (row.dofollow) score += 4
+  if ((Number(row.rank) || 0) >= 40) score += 8
+  if ((Number(row.rank) || 0) >= 70) score += 8
+
+  let quality: 'relevant' | 'risky' | 'spam' = 'relevant'
+  if (
+    BACKLINK_SPAM_HOST_HINTS.some((h) => domainFrom.includes(h)) ||
+    BACKLINK_SPAM_TLDS.has(tld) ||
+    BACKLINK_SPAM_ANCHOR_HINTS.some((h) => anchor.includes(h)) ||
+    reasons.includes('spam-url')
+  ) {
+    quality = 'spam'
+  } else if (score < 12 && (Number(row.rank) || 0) < 15) {
+    quality = 'risky'
+  } else if (score < 25 && !reasons.includes('local-tld') && (Number(row.rank) || 0) < 25) {
+    quality = 'risky'
+  }
+  return { score, quality, reasons, domain_from: domainFrom, url_to: urlTo }
+}
+
+/** Normalize raw provider rows into per-domain real backlinks with quality labels. */
+function normalizeBacklinkInventory(rawRows: any[], domain: string) {
+  const cleanDomain = String(domain || '')
+    .replace(/^https?:\/\//, '')
+    .replace(/^www\./, '')
+    .replace(/\/.*$/, '')
+    .toLowerCase()
+  const seen = new Set<string>()
+  const deduped: any[] = []
+  let droppedWrongTarget = 0
+  let spamCount = 0
+  let riskyCount = 0
+  let relevantCount = 0
+
+  for (const row of rawRows || []) {
+    const domainFrom = backlinkHostOf(row.domain_from || row.url_from || '')
+    if (!domainFrom) continue
+    // Drop self-links
+    if (domainFrom === cleanDomain || domainFrom.endsWith(`.${cleanDomain}`)) continue
+    const urlTo = String(row.url_to || '')
+    if (urlTo && !backlinkTargetsDomain(urlTo, cleanDomain)) {
+      droppedWrongTarget += 1
+      continue
+    }
+    const q = scoreBacklinkRow(row, cleanDomain)
+    const urlFrom = String(row.url_from || '').toLowerCase()
+    const anchor = String(row.anchor || '').toLowerCase()
+    const key = `${domainFrom}|${urlFrom}|${anchor}`
+    if (seen.has(key)) continue
+    seen.add(key)
+    const next = {
+      ...row,
+      domain_from: q.domain_from,
+      url_to: q.url_to,
+      quality: q.quality,
+      qualityScore: q.score,
+      qualityReasons: q.reasons,
+      evidence: {
+        targetDomain: cleanDomain,
+        provider: row.source || 'unknown',
+        url_from: row.url_from || '',
+        url_to: q.url_to,
+      },
+    }
+    if (q.quality === 'spam') spamCount += 1
+    else if (q.quality === 'risky') riskyCount += 1
+    else relevantCount += 1
+    deduped.push(next)
+  }
+
+  deduped.sort((a, b) => {
+    const qRank = { relevant: 0, risky: 1, spam: 2 } as Record<string, number>
+    const qd = (qRank[a.quality] ?? 9) - (qRank[b.quality] ?? 9)
+    if (qd !== 0) return qd
+    const s = (Number(b.qualityScore) || 0) - (Number(a.qualityScore) || 0)
+    if (s !== 0) return s
+    return (Number(b.rank) || 0) - (Number(a.rank) || 0)
+  })
+
+  return {
+    rows: deduped,
+    summaryPatch: {
+      sampleRows: deduped.length,
+      relevant: relevantCount,
+      risky: riskyCount,
+      spam: spamCount,
+      droppedWrongTarget,
+    },
+  }
+}
+
 app.get('/api/backlinks/aggregated', expensiveLimiter, async (req, res) => {
   const { domain, refresh, limit } = req.query as Record<string, string>
   if (!domain?.trim()) return res.status(400).json({ error: 'domain required' })
@@ -1577,7 +1727,23 @@ app.get('/api/backlinks/aggregated', expensiveLimiter, async (req, res) => {
   if (!forceRefresh) {
     const cached = await loadSnapshotPayload(domain, 'backlinks_agg')
     if (cached?.data && (Array.isArray(cached.data.normalized) ? cached.data.normalized.length > 0 : Object.keys(cached.data.sources || {}).length > 0)) {
-      return res.json({ ...cached.data, domain, market: pack, dataState: 'cached', fetchedAt: cached.fetchedAt, fromSnapshot: true })
+      const payload = { ...cached.data, domain, market: pack, dataState: 'cached', fetchedAt: cached.fetchedAt, fromSnapshot: true }
+      // Always re-score older snapshots so spam/PBN rows do not leak into the default operator view
+      if (Array.isArray(payload.normalized) && payload.normalized.length) {
+        const needsRescore = payload.normalized.some((r: any) => !r.quality || !r.evidence?.targetDomain)
+        if (needsRescore || payload.normalized.some((r: any) => r.url_to && !String(r.url_to).toLowerCase().includes(String(domain).toLowerCase().replace(/^www\./, '')))) {
+          const scored = normalizeBacklinkInventory(payload.normalized, domain)
+          payload.normalized = scored.rows
+          payload.normalizedAll = scored.rows
+          payload.summary = { ...(payload.summary || {}), ...scored.summaryPatch }
+        }
+      }
+      // Never return a snapshot belonging to another domain
+      if (payload.domain && String(payload.domain).toLowerCase() !== String(domain).toLowerCase()) {
+        // continue to live fetch
+      } else {
+        return res.json(payload)
+      }
     }
   }
 
@@ -1623,7 +1789,9 @@ app.get('/api/backlinks/aggregated', expensiveLimiter, async (req, res) => {
             target: domain,
             mode: 'subdomains',
             limit: rowLimit,
-            select: 'url_from,url_to,anchor,domain_rating_source,is_dofollow,first_seen,title',
+            // Prefer higher-authority referring pages — reduces PBN/.shop spam at the top
+            order_by: 'domain_rating_source:desc',
+            select: 'url_from,url_to,anchor,domain_rating_source,is_dofollow,first_seen,title,is_content,is_spam',
           },
           headers: ahrefsHeaders,
           timeout: 20000,
@@ -1962,22 +2130,19 @@ app.get('/api/backlinks/aggregated', expensiveLimiter, async (req, res) => {
     }
   }
 
-  // Deduplicate normalized rows by source url + anchor
+  // Deduplicate + quality-score only REAL per-domain backlinks (target host must match domain)
   if (Array.isArray(result.normalized) && result.normalized.length) {
-    const seen = new Set<string>()
-    const deduped: any[] = []
-    for (const row of result.normalized) {
-      const key = `${(row.url_from || '').toLowerCase()}|${(row.anchor || '').toLowerCase()}`
-      if (seen.has(key)) continue
-      seen.add(key)
-      deduped.push(row)
+    const scored = normalizeBacklinkInventory(result.normalized, domain)
+    result.normalized = scored.rows
+    result.normalizedAll = scored.rows
+    result.summary = {
+      ...result.summary,
+      ...scored.summaryPatch,
     }
-    result.normalized = deduped
-    const fromRowsTotal = deduped.length
-    const fromRowsFollow = deduped.filter((r) => r.dofollow).length
-    const fromRowsNoFollow = fromRowsTotal - fromRowsFollow
+    const fromRowsFollow = scored.rows.filter((r) => r.dofollow).length
+    const fromRowsNoFollow = scored.rows.length - fromRowsFollow
     // Prefer provider summary totals when present; never invent. Fall back to row counts.
-    if (!result.summary.total) result.summary.total = fromRowsTotal
+    if (!result.summary.total) result.summary.total = scored.rows.length
     if (!result.summary.dofollow) result.summary.dofollow = fromRowsFollow
     if (!result.summary.nofollow) result.summary.nofollow = fromRowsNoFollow
   }
@@ -2148,7 +2313,18 @@ app.get('/api/backlinks/aggregated', expensiveLimiter, async (req, res) => {
   }
 
   result.refdomains = Array.from(refByKey.values())
-    .sort((a, b) => (b.rank - a.rank) || (b.backlinks - a.backlinks) || a.domain.localeCompare(b.domain))
+    .map((r) => {
+      const host = String(r.domain || '').toLowerCase()
+      const tld = host.includes('.') ? `.${host.split('.').pop()}` : ''
+      const spam = BACKLINK_SPAM_HOST_HINTS.some((h) => host.includes(h)) || BACKLINK_SPAM_TLDS.has(tld)
+      return { ...r, quality: spam ? 'spam' : ((Number(r.rank) || 0) < 15 ? 'risky' : 'relevant') }
+    })
+    .sort((a, b) => {
+      const qRank = { relevant: 0, risky: 1, spam: 2 } as Record<string, number>
+      const qd = (qRank[a.quality] ?? 9) - (qRank[b.quality] ?? 9)
+      if (qd !== 0) return qd
+      return (b.rank - a.rank) || (b.backlinks - a.backlinks) || a.domain.localeCompare(b.domain)
+    })
   if (!result.summary.refDomains) {
     const uniqueDomains = new Set(result.refdomains.map((r: RefDomainRow) => r.domain))
     if (uniqueDomains.size) result.summary.refDomains = uniqueDomains.size

@@ -21,6 +21,8 @@ interface Backlink {
   anchor?: string
   first_seen?: string
   source?: string
+  quality?: 'relevant' | 'risky' | 'spam'
+  qualityScore?: number
 }
 
 interface RefDomain {
@@ -31,6 +33,7 @@ interface RefDomain {
   first_seen?: string
   last_seen?: string
   source?: string
+  quality?: 'relevant' | 'risky' | 'spam'
 }
 
 const SOURCE_LABELS: Record<string, string> = {
@@ -102,6 +105,7 @@ export default function BacklinksPage() {
   const [viewMode, setViewMode] = useState<'links' | 'refdomains'>('links')
   const [filter, setFilter] = useState<'all' | 'dofollow' | 'nofollow'>('all')
   const [sourceFilter, setSourceFilter] = useState<string>('all')
+  const [qualityFilter, setQualityFilter] = useState<'relevant' | 'relevant_risky' | 'all' | 'spam'>('relevant')
   const [search, setSearch] = useState('')
 
   const backlinks: Backlink[] = useMemo(() => {
@@ -115,6 +119,8 @@ export default function BacklinksPage() {
         anchor: b.anchor || b.anchorText || '',
         first_seen: b.first_seen || b.firstSeen || '',
         source: normalizeSource(b.source),
+        quality: b.quality === 'spam' || b.quality === 'risky' || b.quality === 'relevant' ? b.quality : undefined,
+        qualityScore: Number(b.qualityScore ?? b.rank ?? 0) || 0,
       }))
     }
     // Fallback legacy nested DFS related format
@@ -144,6 +150,7 @@ export default function BacklinksPage() {
         first_seen: r.first_seen || '',
         last_seen: r.last_seen || '',
         source: normalizeSource(r.source),
+        quality: r.quality === 'spam' || r.quality === 'risky' || r.quality === 'relevant' ? r.quality : undefined,
       }))
     }
 
@@ -186,10 +193,28 @@ export default function BacklinksPage() {
     dofollow: backlinks.filter((b) => b.dofollow).length,
     nofollow: backlinks.filter((b) => !b.dofollow).length,
     refDomains: new Set(refdomains.map((r) => r.domain)).size,
+    relevant: backlinks.filter((b) => (b.quality || 'relevant') === 'relevant').length,
+    risky: backlinks.filter((b) => b.quality === 'risky').length,
+    spam: backlinks.filter((b) => b.quality === 'spam').length,
   }
+
+  const qualityCounts = useMemo(() => {
+    const relevant = backlinks.filter((b) => (b.quality || 'relevant') === 'relevant').length
+    const risky = backlinks.filter((b) => b.quality === 'risky').length
+    const spam = backlinks.filter((b) => b.quality === 'spam').length
+    return {
+      relevant: Number(summary.relevant ?? relevant) || relevant,
+      risky: Number(summary.risky ?? risky) || risky,
+      spam: Number(summary.spam ?? spam) || spam,
+    }
+  }, [backlinks, summary.relevant, summary.risky, summary.spam])
 
   const filteredLinks = useMemo(() => {
     let list = [...backlinks]
+    // Default view hides spam so operators see domain-relevant sources first
+    if (qualityFilter === 'relevant') list = list.filter((bl) => (bl.quality || 'relevant') === 'relevant')
+    if (qualityFilter === 'relevant_risky') list = list.filter((bl) => bl.quality !== 'spam')
+    if (qualityFilter === 'spam') list = list.filter((bl) => bl.quality === 'spam')
     if (filter === 'dofollow') list = list.filter((bl) => bl.dofollow)
     if (filter === 'nofollow') list = list.filter((bl) => !bl.dofollow)
     if (sourceFilter !== 'all') list = list.filter((bl) => normalizeSource(bl.source) === sourceFilter)
@@ -199,14 +224,20 @@ export default function BacklinksPage() {
         (bl) =>
           (bl.domain_from || '').toLowerCase().includes(q) ||
           (bl.anchor || '').toLowerCase().includes(q) ||
-          (bl.url_from || '').toLowerCase().includes(q),
+          (bl.url_from || '').toLowerCase().includes(q) ||
+          (bl.url_to || '').toLowerCase().includes(q),
       )
     }
+    // Prefer quality score when present
+    list.sort((a, b) => (Number(b.qualityScore || b.rank || 0) - Number(a.qualityScore || a.rank || 0)))
     return list
-  }, [backlinks, filter, sourceFilter, search])
+  }, [backlinks, filter, sourceFilter, search, qualityFilter])
 
   const filteredRefDomains = useMemo(() => {
     let list = [...refdomains]
+    if (qualityFilter === 'relevant') list = list.filter((rd) => (rd.quality || 'relevant') === 'relevant')
+    if (qualityFilter === 'relevant_risky') list = list.filter((rd) => rd.quality !== 'spam')
+    if (qualityFilter === 'spam') list = list.filter((rd) => rd.quality === 'spam')
     if (sourceFilter !== 'all') list = list.filter((rd) => normalizeSource(rd.source) === sourceFilter)
     if (filter === 'dofollow') list = list.filter((rd) => (rd.dofollow ?? 1) > 0)
     if (filter === 'nofollow') list = list.filter((rd) => (rd.dofollow ?? 1) === 0)
@@ -215,7 +246,7 @@ export default function BacklinksPage() {
       list = list.filter((rd) => rd.domain.toLowerCase().includes(q))
     }
     return list
-  }, [refdomains, sourceFilter, filter, search])
+  }, [refdomains, sourceFilter, filter, search, qualityFilter])
 
   const activeListLength = viewMode === 'links' ? filteredLinks.length : filteredRefDomains.length
   const totalPages = Math.max(1, Math.ceil(activeListLength / pageSize))
@@ -248,17 +279,26 @@ export default function BacklinksPage() {
       exportToCSV(headers, rows, `refdomains-${domain}-${new Date().toISOString().slice(0, 10)}`)
       return
     }
-    const headers = ['Source Domain', 'URL From', 'Anchor', 'Rank', 'Dofollow', 'Provider', 'First Seen']
+    const headers = ['Source Domain', 'URL From', 'URL To', 'Anchor', 'Rank', 'Quality', 'Dofollow', 'Provider', 'First Seen']
     const rows = filteredLinks.map((bl) => [
       bl.domain_from || '',
       bl.url_from || '',
+      bl.url_to || '',
       bl.anchor || '',
       bl.rank || '',
+      bl.quality || 'relevant',
       bl.dofollow ? 'Yes' : 'No',
       sourceLabel(bl.source),
       bl.first_seen || '',
     ])
     exportToCSV(headers, rows, `backlinks-${domain}-${new Date().toISOString().slice(0, 10)}`)
+  }
+
+  function qualityBadge(q?: string) {
+    const quality = q || 'relevant'
+    if (quality === 'spam') return 'bg-red-500/15 text-red-300 border-red-500/30'
+    if (quality === 'risky') return 'bg-amber-500/15 text-amber-200 border-amber-500/30'
+    return 'bg-green-500/15 text-green-300 border-green-500/30'
   }
 
   const handleForceSync = async () => {
@@ -292,8 +332,8 @@ export default function BacklinksPage() {
         <div>
           <h2 className="text-base md:text-lg font-semibold text-fg">Backlinks</h2>
           <p className="text-xs md:text-sm text-fg-muted mt-0.5">
-            Live referring domains for <span className="font-medium text-fg">{domain}</span>
-            {activeProject?.name ? ` · ${activeProject.name}` : ''}
+            Real backlinks pointing at <span className="font-medium text-fg">{domain}</span> only
+            {activeProject?.name ? ` · ${activeProject.name}` : ''} — spam hidden by default
           </p>
         </div>
         <div className="flex gap-1.5 flex-wrap items-center">
@@ -326,20 +366,24 @@ export default function BacklinksPage() {
         </div>
       )}
 
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 md:gap-4">
+      <div className="grid grid-cols-2 lg:grid-cols-5 gap-3 md:gap-4">
         <div className="bg-bg-card border border-border rounded-xl p-3.5 md:p-5 card-glow">
-          <p className="text-[10px] md:text-xs font-semibold tracking-wider uppercase text-fg-muted">Total rows</p>
+          <p className="text-[10px] md:text-xs font-semibold tracking-wider uppercase text-fg-muted">Provider total</p>
           <p className="text-2xl md:text-3xl font-bold mt-1 text-fg">{summary.total ?? backlinks.length}</p>
+        </div>
+        <div className="bg-bg-card border border-border rounded-xl p-3.5 md:p-5 card-glow">
+          <p className="text-[10px] md:text-xs font-semibold tracking-wider uppercase text-fg-muted">Relevant sample</p>
+          <p className="text-2xl md:text-3xl font-bold mt-1 text-green">{qualityCounts.relevant}</p>
+        </div>
+        <div className="bg-bg-card border border-border rounded-xl p-3.5 md:p-5 card-glow">
+          <p className="text-[10px] md:text-xs font-semibold tracking-wider uppercase text-fg-muted">Spam filtered</p>
+          <p className="text-2xl md:text-3xl font-bold mt-1 text-red-300">{qualityCounts.spam}</p>
         </div>
         <div className="bg-bg-card border border-border rounded-xl p-3.5 md:p-5 card-glow">
           <p className="text-[10px] md:text-xs font-semibold tracking-wider uppercase text-fg-muted">Referring domains</p>
           <p className="text-2xl md:text-3xl font-bold mt-1 text-accent-light">
             {summary.refDomains ?? new Set(refdomains.map((r) => r.domain)).size}
           </p>
-        </div>
-        <div className="bg-bg-card border border-border rounded-xl p-3.5 md:p-5 card-glow">
-          <p className="text-[10px] md:text-xs font-semibold tracking-wider uppercase text-fg-muted">Dofollow</p>
-          <p className="text-2xl md:text-3xl font-bold mt-1 text-green">{summary.dofollow ?? '—'}</p>
         </div>
         <div className="bg-bg-card border border-border rounded-xl p-3.5 md:p-5 card-glow">
           <p className="text-[10px] md:text-xs font-semibold tracking-wider uppercase text-fg-muted">Ahrefs DR</p>
@@ -408,6 +452,19 @@ export default function BacklinksPage() {
             />
             <div className="flex gap-2 items-center flex-wrap">
               <select
+                value={qualityFilter}
+                onChange={(e) => {
+                  setQualityFilter(e.target.value as any)
+                  setPage(1)
+                }}
+                className="px-3 py-2.5 rounded-lg bg-bg-darkest border border-border text-sm text-fg-muted focus:outline-none focus:border-accent"
+              >
+                <option value="relevant">Relevant only ({qualityCounts.relevant})</option>
+                <option value="relevant_risky">Relevant + risky ({qualityCounts.relevant + qualityCounts.risky})</option>
+                <option value="all">All incl. spam ({backlinks.length})</option>
+                <option value="spam">Spam only ({qualityCounts.spam})</option>
+              </select>
+              <select
                 value={sourceFilter}
                 onChange={(e) => {
                   setSourceFilter(e.target.value)
@@ -467,9 +524,15 @@ export default function BacklinksPage() {
         {!isLoading && !error && activeListLength === 0 && (
           <div className="text-center py-8">
             <p className="text-sm text-fg-muted">
-              {viewMode === 'links' ? `No backlinks inventory yet for ${domain}` : `No referring domains yet for ${domain}`}
+              {viewMode === 'links'
+                ? `No ${qualityFilter === 'spam' ? 'spam' : 'relevant'} backlinks for ${domain}`
+                : `No referring domains yet for ${domain}`}
             </p>
-            <p className="text-xs text-fg-dim mt-1">Force refresh to pull DataForSEO / SEMrush / Ahrefs</p>
+            <p className="text-xs text-fg-dim mt-1">
+              {qualityFilter === 'relevant' && qualityCounts.spam > 0
+                ? `${qualityCounts.spam} spam rows hidden — switch quality filter to see them, or Force refresh for live pull`
+                : 'Force refresh to pull DataForSEO / SEMrush / Ahrefs'}
+            </p>
             <button onClick={handleForceSync} className="mt-3 px-3 py-1.5 rounded-lg border border-accent/30 text-xs text-accent-light">
               Force refresh
             </button>
@@ -489,9 +552,14 @@ export default function BacklinksPage() {
                     >
                       {bl.domain_from || '—'}
                     </ExternalLink>
-                    <span className="text-[10px] px-1.5 py-0.5 rounded bg-accent/10 text-accent-light border border-accent/20">
-                      {sourceLabel(bl.source)}
-                    </span>
+                    <div className="flex items-center gap-1 shrink-0">
+                      <span className={`text-[10px] px-1.5 py-0.5 rounded border ${qualityBadge(bl.quality)}`}>
+                        {bl.quality || 'relevant'}
+                      </span>
+                      <span className="text-[10px] px-1.5 py-0.5 rounded bg-accent/10 text-accent-light border border-accent/20">
+                        {sourceLabel(bl.source)}
+                      </span>
+                    </div>
                   </div>
                   <ExternalLink
                     href={bl.url_from}
@@ -500,6 +568,12 @@ export default function BacklinksPage() {
                   >
                     {bl.url_from || ''}
                   </ExternalLink>
+                  <p className="text-[11px] text-fg-muted mt-1 truncate">
+                    → target:{' '}
+                    <ExternalLink href={bl.url_to} className="text-[11px]" title={bl.url_to}>
+                      {bl.url_to || domain || '—'}
+                    </ExternalLink>
+                  </p>
                   <div className="flex items-center gap-3 mt-2 text-xs text-fg-muted">
                     <span className="truncate">Anchor: {bl.anchor || '—'}</span>
                     <span>Rank: {bl.rank || '—'}</span>
@@ -510,12 +584,13 @@ export default function BacklinksPage() {
             </div>
 
             <div className="hidden md:block overflow-x-auto table-scroll">
-              <table className="w-full text-sm">
+              <table className="w-full text-sm min-w-[920px]">
                 <thead>
                   <tr className="border-b border-border">
-                    <th className="text-left py-2 px-3 text-fg-dim font-medium">Source domain</th>
+                    <th className="text-left py-2 px-3 text-fg-dim font-medium">Source → your page</th>
                     <th className="text-left py-2 px-3 text-fg-dim font-medium">Anchor</th>
                     <th className="text-right py-2 px-3 text-fg-dim font-medium">Rank</th>
+                    <th className="text-right py-2 px-3 text-fg-dim font-medium">Quality</th>
                     <th className="text-right py-2 px-3 text-fg-dim font-medium">Type</th>
                     <th className="text-right py-2 px-3 text-fg-dim font-medium">Provider</th>
                   </tr>
@@ -526,17 +601,24 @@ export default function BacklinksPage() {
                       <td className="py-2.5 px-3">
                         <ExternalLink
                           href={bl.url_from || bl.domain_from}
-                          className="font-medium truncate max-w-[220px] block"
+                          className="font-medium truncate max-w-[260px] block"
                           title={bl.url_from || bl.domain_from}
                         >
                           {bl.domain_from || '—'}
                         </ExternalLink>
                         <ExternalLink
                           href={bl.url_from}
-                          className="text-xs text-fg-dim truncate max-w-[220px] block mt-0.5"
+                          className="text-xs text-fg-dim truncate max-w-[260px] block mt-0.5"
                           title={bl.url_from}
                         >
-                          {bl.url_from?.slice(0, 60) || ''}
+                          {bl.url_from?.slice(0, 70) || ''}
+                        </ExternalLink>
+                        <ExternalLink
+                          href={bl.url_to}
+                          className="text-[11px] text-fg-muted truncate max-w-[260px] block mt-0.5"
+                          title={bl.url_to}
+                        >
+                          → {bl.url_to || domain || '—'}
                         </ExternalLink>
                       </td>
                       <td className="py-2.5 px-3 text-fg-muted truncate max-w-[150px]">
@@ -549,6 +631,11 @@ export default function BacklinksPage() {
                         )}
                       </td>
                       <td className="py-2.5 px-3 text-right text-fg-muted">{bl.rank || '—'}</td>
+                      <td className="py-2.5 px-3 text-right">
+                        <span className={`text-[10px] px-1.5 py-0.5 rounded border ${qualityBadge(bl.quality)}`}>
+                          {bl.quality || 'relevant'}
+                        </span>
+                      </td>
                       <td className="py-2.5 px-3 text-right">
                         <span className={`text-xs px-1.5 py-0.5 rounded touch-target-reset ${bl.dofollow ? 'bg-green-500/20 text-green-300' : 'bg-gray-500/20 text-gray-400'}`}>
                           {bl.dofollow ? 'dofollow' : 'nofollow'}
