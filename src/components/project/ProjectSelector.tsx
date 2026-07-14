@@ -15,7 +15,11 @@ export default function ProjectSelector({ onSelected }: ProjectSelectorProps) {
   const filtered = useMemo(() => {
     const needle = query.trim().toLowerCase()
     if (!needle) return projects
-    return projects.filter(project => [project.name, project.domain, project.clientName, project.market, project.status].some(value => value.toLowerCase().includes(needle)))
+    return projects.filter(project =>
+      [project.name, project.domain, project.clientName, project.market, project.status]
+        .map(value => (value ?? '').toString().toLowerCase())
+        .some(value => value.includes(needle)),
+    )
   }, [projects, query])
 
   useEffect(() => {

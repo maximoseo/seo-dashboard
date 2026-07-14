@@ -144,7 +144,10 @@ export default function BacklinksPage() {
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
         <div>
           <h2 className="text-base md:text-lg font-semibold text-fg">Backlinks</h2>
-          <p className="text-xs md:text-sm text-fg-muted mt-0.5">Live referring domains for {domain}</p>
+          <p className="text-xs md:text-sm text-fg-muted mt-0.5">
+            Live referring domains for <span className="font-medium text-fg">{domain}</span>
+            {activeProject?.name ? ` · ${activeProject.name}` : ''}
+          </p>
         </div>
         <div className="flex gap-1.5 flex-wrap items-center">
           <ExportCSVButton onClick={handleExport} />
@@ -216,7 +219,7 @@ export default function BacklinksPage() {
         <div className="flex flex-col sm:flex-row gap-2.5 sm:gap-3 mb-4">
           <input
             type="text"
-            placeholder="Search domain / anchor / URL…"
+            placeholder="Search referring domain / anchor…"
             value={search}
             onChange={(e) => {
               setSearch(e.target.value)

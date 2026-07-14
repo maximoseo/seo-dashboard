@@ -45,7 +45,7 @@ const AhrefsContext = createContext<AhrefsData>({
   pagespeedDesktop: null,
   pagespeedMobile: null,
   activeSources: [],
-  target: 'maximo-seo.ai',
+  target: '',
   setTarget: () => {},
   refresh: () => {},
 })
@@ -56,7 +56,7 @@ export function useAhrefs() {
 
 export function AhrefsProvider({ children }: { children: ReactNode }) {
   const { activeDomain, activeProject } = useProject()
-  const target = activeDomain || 'maximo-seo.ai'
+  const target = activeDomain || activeProject?.domain || ''
   const market = activeProject?.market || null
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -74,6 +74,20 @@ export function AhrefsProvider({ children }: { children: ReactNode }) {
     let cancelled = false
 
     const loadData = async () => {
+      if (!target) {
+        setLoading(false)
+        setError(null)
+        setDomainRating(null)
+        setSiteMetrics(null)
+        setBacklinksStats(null)
+        setOrganicKeywords([])
+        setRefDomains([])
+        setSemrushOverview(null)
+        setPagespeedDesktop(null)
+        setPagespeedMobile(null)
+        setActiveSources([])
+        return
+      }
       setLoading(true)
       setError(null)
       const date = getToday()
@@ -119,6 +133,7 @@ export function AhrefsProvider({ children }: { children: ReactNode }) {
   }, [target, market])
 
   const refresh = async () => {
+    if (!target) return
     setLoading(true)
     setError(null)
     const date = getToday()

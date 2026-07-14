@@ -8,6 +8,11 @@ const styles: Record<ProjectStatus, string> = {
   archived: 'border-white/10 bg-white/[0.04] text-fg-dim',
 }
 
-export default function ProjectStatusBadge({ status, className = '' }: { status: ProjectStatus; className?: string }) {
-  return <span className={`inline-flex rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${styles[status]} ${className}`}>{status}</span>
+export default function ProjectStatusBadge({ status, className = '' }: { status?: ProjectStatus | string | null; className?: string }) {
+  const resolved = (status && status in styles ? status : 'planned') as ProjectStatus
+  return (
+    <span className={`inline-flex rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${styles[resolved]} ${className}`}>
+      {resolved}
+    </span>
+  )
 }

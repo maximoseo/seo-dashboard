@@ -1,7 +1,7 @@
 export type DataState = 'live' | 'cached' | 'loading' | 'demo' | 'unavailable' | 'unauthorized' | 'planned'
 
 interface DataStateBadgeProps {
-  state: DataState
+  state?: DataState | string | null
   source?: string
   fetchedAt?: string | null
   className?: string
@@ -27,14 +27,20 @@ const stateLabels: Record<DataState, string> = {
   planned: 'Planned',
 }
 
+function resolveState(state?: DataState | string | null): DataState {
+  if (state && state in stateStyles) return state as DataState
+  return 'unavailable'
+}
+
 export default function DataStateBadge({ state, source, fetchedAt, className = '' }: DataStateBadgeProps) {
+  const resolved = resolveState(state)
   const timestamp = fetchedAt ? new Date(fetchedAt).toLocaleString() : null
   return (
     <span
-      className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-semibold ${stateStyles[state]} ${className}`}
+      className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-semibold ${stateStyles[resolved]} ${className}`}
       title={[source, timestamp].filter(Boolean).join(' • ')}
     >
-      {stateLabels[state]}
+      {stateLabels[resolved]}
       {source ? <span className="font-medium opacity-80">{source}</span> : null}
     </span>
   )

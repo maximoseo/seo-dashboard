@@ -15,7 +15,7 @@ interface SEOContextData {
 }
 
 const SEOContext = createContext<SEOContextData>({
-  domain: 'maximo-seo.ai',
+  domain: '',
   setDomain: () => {},
   overview: null,
   overviewLoading: false,
@@ -32,7 +32,8 @@ export function useSEO() {
 
 export function SEOProvider({ children }: { children: ReactNode }) {
   const { activeDomain, activeProject, setActiveProject } = useProject()
-  const domain = activeDomain || 'maximo-seo.ai'
+  // Bound to the open project / portfolio domain — never invent a stub domain.
+  const domain = activeDomain || activeProject?.domain || ''
   const market = activeProject?.market || null
   const [overview, setOverview] = useState<OverviewData | null>(null)
   const [overviewLoading, setOverviewLoading] = useState(false)
@@ -41,6 +42,12 @@ export function SEOProvider({ children }: { children: ReactNode }) {
   const [healthLoading, setHealthLoading] = useState(false)
 
   const loadOverview = useCallback(async () => {
+    if (!domain) {
+      setOverview(null)
+      setOverviewLoading(false)
+      setOverviewError(null)
+      return
+    }
     setOverviewLoading(true)
     setOverviewError(null)
     try {

@@ -22,8 +22,6 @@ interface ProjectContextData {
   refreshProjects: () => Promise<void>
 }
 
-const DEFAULT_DOMAIN = 'maximo-seo.ai'
-
 const ProjectContext = createContext<ProjectContextData | null>(null)
 
 function getStoredDomain(): string | null {
@@ -50,7 +48,7 @@ function getQueryDomain(search: string): string | null {
 export function ProjectProvider({ children }: { children: ReactNode }) {
   const location = useLocation()
   const navigate = useNavigate()
-  const initialDomain = getDomainFromProjectPathname(location.pathname) || getQueryDomain(location.search) || getStoredDomain() || DEFAULT_DOMAIN
+  const initialDomain = getDomainFromProjectPathname(location.pathname) || getQueryDomain(location.search) || getStoredDomain() || ''
   const [activeDomain, setActiveDomain] = useState(initialDomain)
   const [projectList, setProjectList] = useState<ProjectListResponse | null>(null)
   const [loading, setLoading] = useState(true)
@@ -92,16 +90,28 @@ export function ProjectProvider({ children }: { children: ReactNode }) {
     }
   }, [activeDomain, location.pathname, location.search])
 
-  useEffect(() => {
-    if (!activeDomain && projectList?.projects[0]) {
-      setActiveDomain(projectList.projects[0].domain)
-      storeDomain(projectList.projects[0].domain)
-    }
-  }, [activeDomain, projectList])
-
   const projects = projectList?.projects ?? []
+
+  // Prefer route domain → stored → first portfolio project. Never invent a domain
+  // that is not in the user's portfolio (e.g. maximo-seo.ai system stub).
+  useEffect(() => {
+    if (!projectList) return
+    const routeDomain = getDomainFromProjectPathname(location.pathname)
+    if (routeDomain) return
+    if (activeDomain && projects.some(p => (p.domain || '').toLowerCase() === activeDomain.toLowerCase())) {
+      return
+    }
+    const fallback = projects[0]?.domain
+    if (fallback) {
+      setActiveDomain(fallback)
+      storeDomain(fallback)
+    }
+  }, [activeDomain, location.pathname, projectList, projects])
+
   const activeProject = useMemo(() => {
-    return projects.find(project => project.domain.toLowerCase() === activeDomain.toLowerCase()) ?? null
+    if (!activeDomain) return null
+    const needle = activeDomain.toLowerCase()
+    return projects.find(project => (project.domain || '').toLowerCase() === needle) ?? null
   }, [activeDomain, projects])
 
   const setActiveProject = useCallback((domain: string, options: { preserveModule?: boolean; module?: ProjectModule | null } = {}) => {
@@ -116,7 +126,7 @@ export function ProjectProvider({ children }: { children: ReactNode }) {
   }, [location.pathname, navigate])
 
   const value = useMemo<ProjectContextData>(() => ({
-    activeDomain: activeProject?.domain || activeDomain || DEFAULT_DOMAIN,
+    activeDomain: activeProject?.domain || activeDomain || projects[0]?.domain || '',
     activeProject,
     projects,
     source: projectList?.source ?? null,

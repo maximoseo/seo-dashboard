@@ -93,7 +93,10 @@ export default function ProjectsIndexPage() {
     const needle = query.trim().toLowerCase()
     return projects.filter(project => {
       const statusMatch = status === 'all' || project.status === status
-      const queryMatch = !needle || [project.name, project.domain, project.clientName, project.market].some(value => value.toLowerCase().includes(needle))
+      // Null-safe: API rows can omit optional strings; avoid crashing the /projects screen.
+      const queryMatch = !needle || [project.name, project.domain, project.clientName, project.market]
+        .map(value => (value ?? '').toString().toLowerCase())
+        .some(value => value.includes(needle))
       return statusMatch && queryMatch
     })
   }, [projects, query, status])

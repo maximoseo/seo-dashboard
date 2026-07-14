@@ -1,7 +1,10 @@
 import { useState, useEffect, useCallback } from 'react'
+import { useLocation } from 'react-router-dom'
 import { DataCard } from '@/components/DataCard'
 import { fetchApiHealth, clearApiCache, type ApiHealthStatus } from '@/services/seoApi'
 import { useSEO } from '@/contexts/SEOContext'
+import { useProject } from '@/contexts/ProjectContext'
+import { getDomainFromProjectPathname } from '@/lib/projectRoutes'
 
 const apiSources = [
   { key: 'ahrefs', name: 'Ahrefs', description: 'DR, backlinks, organic keywords, traffic', color: 'orange' },
@@ -29,10 +32,18 @@ const colorMap: Record<string, string> = {
 
 export default function SettingsPage() {
   const { domain, setDomain } = useSEO()
+  const { activeProject } = useProject()
+  const location = useLocation()
+  // Inside a project workspace domain is locked — no free-form URL entry.
+  const inProjectWorkspace = Boolean(getDomainFromProjectPathname(location.pathname) || activeProject)
   const [health, setHealth] = useState<ApiHealthStatus | null>(null)
   const [healthLoading, setHealthLoading] = useState(false)
   const [cacheCleared, setCacheCleared] = useState(false)
   const [domainInput, setDomainInput] = useState(domain)
+
+  useEffect(() => {
+    setDomainInput(domain)
+  }, [domain])
 
   const checkHealth = useCallback(async () => {
     setHealthLoading(true)
@@ -62,31 +73,45 @@ export default function SettingsPage() {
 
   const connectedCount = health ? Object.values(health.statuses).filter(s => s.ok).length : 0
   const totalCount = apiSources.length
+  const lockedDomain = activeProject?.domain || domain
 
   return (
     <div className="space-y-4 lg:space-y-5 pt-4">
-      {/* Domain Config */}
-      <DataCard title="Domain Configuration">
+      {/* Domain Config — locked when browsing inside a project workspace */}
+      <DataCard title={inProjectWorkspace ? 'Active Project Domain' : 'Domain Configuration'}>
         <div className="space-y-3">
-          <div>
-            <label className="text-[11px] md:text-xs text-fg-dim mb-1.5 block">Target Domain</label>
-            <div className="flex flex-col sm:flex-row gap-2">
-              <input
-                type="text"
-                value={domainInput}
-                onChange={e => setDomainInput(e.target.value)}
-                placeholder="example.com"
-                className="flex-1 bg-bg-darkest border border-border rounded-lg px-3 py-2.5 text-sm text-fg placeholder:text-fg-dim focus:outline-none focus:border-accent"
-              />
-              <button
-                onClick={handleDomainSave}
-                className="bg-accent hover:bg-accent/80 text-white text-sm px-4 py-2.5 rounded-lg transition-colors touch-target-reset"
-              >
-                Save
-              </button>
+          {inProjectWorkspace ? (
+            <div className="rounded-xl border border-border bg-bg-darkest p-4">
+              <p className="text-[11px] md:text-xs text-fg-dim mb-1">Domain is locked to the open project</p>
+              <p className="text-sm font-semibold text-fg">{lockedDomain}</p>
+              {activeProject?.name && (
+                <p className="mt-1 text-xs text-fg-muted">{activeProject.name} · {activeProject.market}</p>
+              )}
+              <p className="mt-2 text-[11px] text-fg-dim">
+                Switch projects from Projects / Sites or the sidebar selector. No URL entry is needed inside modules like Backlinks.
+              </p>
             </div>
-            <p className="text-[11px] md:text-xs text-fg-dim mt-1">Current: <span className="text-accent">{domain}</span></p>
-          </div>
+          ) : (
+            <div>
+              <label className="text-[11px] md:text-xs text-fg-dim mb-1.5 block">Target Domain</label>
+              <div className="flex flex-col sm:flex-row gap-2">
+                <input
+                  type="text"
+                  value={domainInput}
+                  onChange={e => setDomainInput(e.target.value)}
+                  placeholder="example.com"
+                  className="flex-1 bg-bg-darkest border border-border rounded-lg px-3 py-2.5 text-sm text-fg placeholder:text-fg-dim focus:outline-none focus:border-accent"
+                />
+                <button
+                  onClick={handleDomainSave}
+                  className="bg-accent hover:bg-accent/80 text-white text-sm px-4 py-2.5 rounded-lg transition-colors touch-target-reset"
+                >
+                  Save
+                </button>
+              </div>
+              <p className="text-[11px] md:text-xs text-fg-dim mt-1">Current: <span className="text-accent">{domain}</span></p>
+            </div>
+          )}
         </div>
       </DataCard>
 
