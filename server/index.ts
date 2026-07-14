@@ -479,6 +479,8 @@ const LOCAL_FALCON_API_KEY =
   process.env.LOCALFALCON_API ||
   ''
 const MANGOOLS_API_KEY = process.env.MANGOOLS_API_KEY || process.env.SERPSTAT_COM_API_KEY_2 || ''
+// Morningscore (stable when User-Agent is set; REST backlinks via /v1/{domainId}/backlinks)
+const MORNINGSCORE_API_KEY = process.env.MORNINGSCORE_API_KEY || process.env.MORNING_SCORE_API_KEY || ''
 
 const DATAFORSEO_AUTH = Buffer.from(`${DATAFORSEO_LOGIN}:${DATAFORSEO_PASSWORD}`).toString('base64')
 
@@ -520,6 +522,43 @@ async function serpstatRpc(method: string, params: Record<string, any>) {
   if (r.status >= 400) throw new Error(`Serpstat HTTP ${r.status}`)
   if (r.data?.error) throw new Error(r.data.error?.message || 'Serpstat error')
   return r.data
+}
+
+/** Morningscore REST helper — Cloudflare blocks empty/simple UA; keep a real UA. */
+function morningscoreHeaders() {
+  return {
+    Authorization: `Bearer ${MORNINGSCORE_API_KEY}`,
+    Accept: 'application/json',
+    'User-Agent': 'Mozilla/5.0 (compatible; MaximoSEO/1.0; +https://seo-dashboard.maximo-seo.ai)',
+  }
+}
+
+async function morningscoreGet(path: string, timeout = 20000) {
+  if (!MORNINGSCORE_API_KEY) throw new Error('Morningscore API key not configured')
+  const r = await axios.get(`https://api.morningscore.io${path}`, {
+    headers: morningscoreHeaders(),
+    timeout,
+    validateStatus: (s) => s < 500,
+  })
+  if (r.status >= 400) {
+    const err: any = new Error(`Morningscore HTTP ${r.status}`)
+    err.response = r
+    throw err
+  }
+  return r.data
+}
+
+/**
+ * Resolve Morningscore domain id for a hostname.
+ * Only domains already registered in the Morningscore account are usable for Links API.
+ */
+async function morningscoreResolveDomainId(hostname: string): Promise<{ id: string; domain: string } | null> {
+  const list = await morningscoreGet('/v1/domains')
+  if (!Array.isArray(list)) return null
+  const needle = hostname.replace(/^www\./, '').toLowerCase()
+  const hit = list.find((d: any) => String(d?.domain || '').replace(/^www\./, '').toLowerCase() === needle)
+  if (!hit?.global_domain_identifier) return null
+  return { id: String(hit.global_domain_identifier), domain: String(hit.domain || hostname) }
 }
 
 async function keywordsEverywhereVolumes(keywords: string[], pack: ReturnType<typeof resolveMarket>) {
@@ -1591,26 +1630,64 @@ app.get('/api/backlinks/aggregated', expensiveLimiter, async (req, res) => {
           timeout: 15000,
         })
       : Promise.reject('No SEMrush key'),
-    axios.post('https://api.dataforseo.com/v3/backlinks/domain_pages_summary/live',
-      [{ target: domain, include_subdomains: true }],
-      { headers: { Authorization: `Basic ${DATAFORSEO_AUTH}`, 'Content-Type': 'application/json' }, timeout: 15000 }),
-    SE_RANKING_API
-      ? axios.get('https://api4.seranking.com/backlinks/info/', {
-          params: { domain }, headers: { Authorization: `Token ${SE_RANKING_API}` }, timeout: 10000, validateStatus: (s) => s < 500,
-        }).then((r) => {
-          if (r.status === 403 || r.status === 401 || r.status === 402 || r.status === 429) {
-            return { softDegraded: true, state: 'soft_degraded', httpStatus: r.status, ok: false, provider: 'seranking', data: null }
-          }
-          if (r.status >= 400) throw new Error(`HTTP ${r.status}`)
-          return r.data
-        })
-      : Promise.reject('No API key'),
+    // DataForSEO — summary + live rows
+    DATAFORSEO_AUTH
+      ? axios.post('https://api.dataforseo.com/v3/backlinks/summary/live',
+          [{ target: domain, include_subdomains: true }],
+          { headers: { Authorization: `Basic ${DATAFORSEO_AUTH}`, 'Content-Type': 'application/json' }, timeout: 20000 })
+      : Promise.reject('No DataForSEO auth'),
+    DATAFORSEO_AUTH
+      ? axios.post('https://api.dataforseo.com/v3/backlinks/backlinks/live',
+          [{ target: domain, mode: 'as_is', limit: rowLimit, order_by: ['rank,desc'] }],
+          { headers: { Authorization: `Basic ${DATAFORSEO_AUTH}`, 'Content-Type': 'application/json' }, timeout: 25000 })
+      : Promise.reject('No DataForSEO auth'),
+    // Serpstat — summary + sample new backlinks + ref domains
     SERPSTAT_API_KEY
       ? serpstatRpc('SerpstatBacklinksProcedure.getSummaryV2', { query: domain, searchType: 'domain' })
-      : Promise.reject('No API key'),
+      : Promise.reject('No Serpstat key'),
+    SERPSTAT_API_KEY
+      ? serpstatRpc('SerpstatBacklinksProcedure.getNewBacklinks', {
+          query: domain,
+          searchType: 'domain',
+          page: 1,
+          size: Math.min(rowLimit, 100),
+        })
+      : Promise.reject('No Serpstat key'),
+    SERPSTAT_API_KEY
+      ? serpstatRpc('SerpstatBacklinksProcedure.getRefDomains', {
+          query: domain,
+          searchType: 'domain',
+          page: 1,
+          size: Math.min(rowLimit, 100),
+        })
+      : Promise.reject('No Serpstat key'),
+    // Morningscore Links (only if domain is registered in the MS account)
+    MORNINGSCORE_API_KEY
+      ? morningscoreResolveDomainId(domain).then(async (resolved) => {
+          if (!resolved) {
+            return { skipped: true, reason: 'domain_not_in_morningscore_account' }
+          }
+          const pageSize = Math.min(rowLimit, 100)
+          const payload = await morningscoreGet(`/v1/${resolved.id}/backlinks?page=1&per_page=${pageSize}`, 25000)
+          return { resolved, payload }
+        })
+      : Promise.reject('No Morningscore key'),
   ])
 
-  const [ahrefsStats, ahrefsRD, ahrefsRows, semrushOverview, semrushRows, semrushRD, dataforseo, seranking, serpstat] = calls
+  const [
+    ahrefsStats,
+    ahrefsRD,
+    ahrefsRows,
+    semrushOverview,
+    semrushRows,
+    semrushRD,
+    dataforseoSummary,
+    dataforseoRows,
+    serpstatSummary,
+    serpstatRows,
+    serpstatRD,
+    morningscore,
+  ] = calls
 
   // ---- Ahrefs ----
   if (ahrefsStats.status === 'fulfilled' || ahrefsRD.status === 'fulfilled' || ahrefsRows.status === 'fulfilled') {
@@ -1708,39 +1785,145 @@ app.get('/api/backlinks/aggregated', expensiveLimiter, async (req, res) => {
     result.softDegraded.push('SEMrush')
   }
 
-  // ---- DataForSEO ----
-  if (dataforseo.status === 'fulfilled') {
-    result.sources.dataforseo = dataforseo.value.data?.tasks?.[0]?.result?.[0]
-    if (result.sources.dataforseo) result.activeSources.push('DataForSEO')
+  // ---- DataForSEO (stable) ----
+  if (dataforseoSummary.status === 'fulfilled' || dataforseoRows.status === 'fulfilled') {
+    result.sources.dataforseo = {}
+    if (dataforseoSummary.status === 'fulfilled') {
+      const summaryRow = dataforseoSummary.value.data?.tasks?.[0]?.result?.[0]
+      result.sources.dataforseo.summary = summaryRow
+      if (summaryRow) {
+        const bl = Number(summaryRow.backlinks ?? summaryRow.backlinks_count ?? 0) || 0
+        const refs = Number(summaryRow.referring_domains ?? summaryRow.referringDomains ?? 0) || 0
+        const follow = Number(summaryRow.referring_links_dofollow ?? summaryRow.dofollow ?? 0) || 0
+        const nofollow = Number(summaryRow.referring_links_nofollow ?? summaryRow.nofollow ?? 0) || 0
+        if (bl) result.summary.total = Math.max(result.summary.total, bl)
+        if (refs) result.summary.refDomains = result.summary.refDomains ?? refs
+        if (follow) result.summary.dofollow = Math.max(result.summary.dofollow, follow)
+        if (nofollow) result.summary.nofollow = Math.max(result.summary.nofollow, nofollow)
+      }
+    } else if (DATAFORSEO_AUTH) {
+      result.softDegraded.push('DataForSEO(summary)')
+    }
+    if (dataforseoRows.status === 'fulfilled') {
+      const rowPayload = dataforseoRows.value.data?.tasks?.[0]?.result?.[0]
+      result.sources.dataforseo.backlinks = rowPayload
+      const items = Array.isArray(rowPayload?.items) ? rowPayload.items : []
+      for (const b of items) {
+        result.normalized.push({
+          url_from: b.url_from || '',
+          domain_from: b.domain_from || '',
+          url_to: b.url_to || '',
+          rank: Number(b.rank ?? b.domain_from_rank ?? 0) || 0,
+          dofollow: b.dofollow !== false && b.is_dofollow !== false,
+          anchor: b.anchor || '',
+          first_seen: b.first_seen || '',
+          source: 'dataforseo',
+        })
+      }
+    } else if (DATAFORSEO_AUTH) {
+      result.softDegraded.push('DataForSEO(rows)')
+    }
+    if (!result.activeSources.includes('DataForSEO')) result.activeSources.push('DataForSEO')
   } else if (DATAFORSEO_AUTH) {
     result.softDegraded.push('DataForSEO')
   }
 
-  // ---- SE Ranking ----
-  if (seranking.status === 'fulfilled') {
-    const ser = seranking.value as any
-    if (ser?.softDegraded || ser?.state === 'soft_degraded') {
-      result.sources.seranking = ser
-      result.softDegraded.push('SE Ranking')
-    } else {
-      result.sources.seranking = ser
-      result.activeSources.push('SE Ranking')
+  // ---- Serpstat (stable) ----
+  if (serpstatSummary.status === 'fulfilled' || serpstatRows.status === 'fulfilled' || serpstatRD.status === 'fulfilled') {
+    result.sources.serpstat = {}
+    if (serpstatSummary.status === 'fulfilled') {
+      result.sources.serpstat.summary = serpstatSummary.value
+      const serpstatNorm = backlinksFromSerpstat(serpstatSummary.value)
+      if (serpstatNorm && typeof serpstatNorm === 'object' && !Array.isArray(serpstatNorm)) {
+        result.sources.serpstat_summary = serpstatNorm
+        if (serpstatNorm.backlinks != null) result.summary.total = Math.max(result.summary.total, Number(serpstatNorm.backlinks) || 0)
+        if (serpstatNorm.refDomains != null) result.summary.refDomains = result.summary.refDomains ?? Number(serpstatNorm.refDomains)
+      }
+      const data = serpstatSummary.value?.result?.data || serpstatSummary.value?.data || {}
+      const refs = Number(data.referring_domains ?? 0) || 0
+      if (refs) result.summary.refDomains = result.summary.refDomains ?? refs
+    } else if (SERPSTAT_API_KEY) {
+      result.softDegraded.push('Serpstat(summary)')
     }
-  } else if (SE_RANKING_API) {
-    result.softDegraded.push('SE Ranking')
-  }
-
-  // ---- Serpstat ----
-  if (serpstat.status === 'fulfilled') {
-    result.sources.serpstat = serpstat.value
-    const serpstatNorm = backlinksFromSerpstat(serpstat.value)
-    // keep summary stats from serpstat when available
-    if (serpstatNorm && typeof serpstatNorm === 'object' && !Array.isArray(serpstatNorm)) {
-      result.sources.serpstat_summary = serpstatNorm
+    if (serpstatRD.status === 'fulfilled') {
+      result.sources.serpstat.refdomains = serpstatRD.value
+    } else if (SERPSTAT_API_KEY) {
+      result.softDegraded.push('Serpstat(refdomains)')
+    }
+    if (serpstatRows.status === 'fulfilled') {
+      result.sources.serpstat.backlinks = serpstatRows.value
+      const rows =
+        serpstatRows.value?.result?.data ||
+        serpstatRows.value?.data ||
+        (Array.isArray(serpstatRows.value) ? serpstatRows.value : [])
+      if (Array.isArray(rows)) {
+        for (const b of rows) {
+          result.normalized.push({
+            url_from: b.url_from || b.urlFrom || '',
+            domain_from: b.domain_from || b.domainFrom || (() => {
+              try { return new URL(String(b.url_from || '')).hostname.replace(/^www\./, '') } catch { return '' }
+            })(),
+            url_to: b.url_to || b.urlTo || '',
+            rank: Number(b.domainRank ?? b.domain_rank ?? b.rank ?? 0) || 0,
+            dofollow: b.nofollow !== true && b.is_nofollow !== true,
+            anchor: b.anchor || b.link_text || '',
+            first_seen: b.first_seen || b.firstSeen || '',
+            source: 'serpstat',
+          })
+        }
+      }
+    } else if (SERPSTAT_API_KEY) {
+      result.softDegraded.push('Serpstat(rows)')
     }
     if (!result.activeSources.includes('Serpstat')) result.activeSources.push('Serpstat')
   } else if (SERPSTAT_API_KEY) {
     result.softDegraded.push('Serpstat')
+  }
+
+  // ---- Morningscore (stable / account-scoped domains only) ----
+  if (morningscore.status === 'fulfilled') {
+    const ms = morningscore.value as any
+    if (ms?.skipped) {
+      result.sources.morningscore = { available: false, reason: ms.reason }
+    } else if (ms?.payload) {
+      result.sources.morningscore = {
+        domainId: ms.resolved?.id,
+        domain: ms.resolved?.domain,
+        total: ms.payload.total,
+        page: ms.payload.page,
+        per_page: ms.payload.per_page,
+        sample: Array.isArray(ms.payload.data) ? ms.payload.data.slice(0, 20) : ms.payload.data,
+      }
+      const total = Number(ms.payload.total ?? 0) || 0
+      if (total) result.summary.total = Math.max(result.summary.total, total)
+      const rows = Array.isArray(ms.payload.data) ? ms.payload.data : []
+      for (const b of rows) {
+        const host = String(b.link || b.domain || b.domain_from || '')
+        result.normalized.push({
+          url_from: host.startsWith('http') ? host : (host ? `https://${host}` : ''),
+          domain_from: host.replace(/^https?:\/\//, '').replace(/\/.*$/, '').replace(/^www\./, ''),
+          url_to: domain,
+          rank: Number(b.strength ?? b.score ?? b.rank ?? 0) || 0,
+          dofollow: true,
+          anchor: b.anchor || '',
+          first_seen: b.date || '',
+          source: 'morningscore',
+        })
+      }
+      if (!result.activeSources.includes('Morningscore')) result.activeSources.push('Morningscore')
+    }
+  } else if (MORNINGSCORE_API_KEY) {
+    result.softDegraded.push('Morningscore')
+  }
+
+  // SE Ranking: env may have a key, but live auth is currently unstable across Token/Bearer.
+  // Keep silent skip — no failing request spam in softDegraded.
+  if (SE_RANKING_API) {
+    result.sources.seranking = {
+      configured: true,
+      active: false,
+      note: 'SE Ranking token present but live backlinks API auth is not stable; skipped until key is validated',
+    }
   }
 
   // Deduplicate normalized rows by source url + anchor
@@ -3377,6 +3560,7 @@ function providerStatus() {
     serpapi: !!SERPAPI_KEY,
     local_falcon: !!LOCAL_FALCON_API_KEY,
     mangools: !!MANGOOLS_API_KEY,
+    morningscore: !!MORNINGSCORE_API_KEY,
   }
 
   return Object.fromEntries(
