@@ -155,13 +155,21 @@ export async function refreshAlerts(domain: string) {
   return guardDomain(await fetchAPI('alerts/aggregated', { domain: clean, refresh: '1' }), clean)
 }
 
-export function useSiteAudit(domain: string | null, market?: string | null) {
+export function useSiteAudit(
+  domain: string | null,
+  market?: string | null,
+  maxPages: number = 20,
+) {
   const marketParam = market?.trim() || ''
   const clean = canonicalizeDomain(domain)
+  const crawlLimit = Math.min(Math.max(Number(maxPages) || 20, 5), 50)
   return useQuery({
-    queryKey: ['site-audit', clean, marketParam],
+    queryKey: ['site-audit', clean, marketParam, crawlLimit],
     queryFn: async () => {
-      const params: Record<string, string> = { domain: clean, max_pages: '20' }
+      const params: Record<string, string> = {
+        domain: clean,
+        max_pages: String(crawlLimit),
+      }
       if (marketParam) params.market = marketParam
       return guardDomain(await fetchAPI('site-audit/aggregated', params), clean)
     },
@@ -171,9 +179,18 @@ export function useSiteAudit(domain: string | null, market?: string | null) {
 }
 
 /** Force live re-fetch of technical site audit. */
-export async function refreshSiteAudit(domain: string, market?: string | null) {
+export async function refreshSiteAudit(
+  domain: string,
+  market?: string | null,
+  maxPages: number = 20,
+) {
   const clean = canonicalizeDomain(domain)
-  const params: Record<string, string> = { domain: clean, refresh: '1', max_pages: '20' }
+  const crawlLimit = Math.min(Math.max(Number(maxPages) || 20, 5), 50)
+  const params: Record<string, string> = {
+    domain: clean,
+    refresh: '1',
+    max_pages: String(crawlLimit),
+  }
   if (market?.trim()) params.market = market.trim()
   return guardDomain(await fetchAPI('site-audit/aggregated', params), clean)
 }
