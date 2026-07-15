@@ -1,18 +1,52 @@
 import { motion } from 'framer-motion'
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
+import { useAhrefs } from '@/contexts/AhrefsContext'
+import { useSEO } from '@/contexts/SEOContext'
+
+function labelForScore(score: number | null): { text: string; className: string } {
+  if (score == null) return { text: 'No score', className: 'text-fg-muted' }
+  if (score >= 80) return { text: 'Strong', className: 'text-green' }
+  if (score >= 60) return { text: 'Fair', className: 'text-yellow-400' }
+  if (score >= 40) return { text: 'Weak', className: 'text-orange-300' }
+  return { text: 'Critical', className: 'text-red-400' }
+}
 
 export default function SEOHealthScore() {
+  const { domain, overview, overviewLoading } = useSEO()
+  const { domainRating, siteMetrics, pagespeedMobile, loading } = useAhrefs()
   const [animatedScore, setAnimatedScore] = useState(0)
-  const score = 87
-  const circumference = 2 * Math.PI * 54
+
+  const score = useMemo(() => {
+    const parts: number[] = []
+    const dr = domainRating?.domain_rating ?? overview?.sources?.ahrefs?.domain_rating?.domain_rating
+    if (typeof dr === 'number' && Number.isFinite(dr)) parts.push(Math.max(0, Math.min(100, dr)))
+
+    const perf = pagespeedMobile?.lighthouse?.performance_score
+    const seo = pagespeedMobile?.lighthouse?.seo_score
+    if (typeof perf === 'number' && perf > 0) parts.push(perf)
+    if (typeof seo === 'number' && seo > 0) parts.push(seo)
+
+    const kw = siteMetrics?.org_keywords
+    const tr = siteMetrics?.org_traffic
+    if (typeof kw === 'number' && kw > 0) parts.push(Math.min(95, 40 + Math.log10(kw + 1) * 18))
+    if (typeof tr === 'number' && tr > 0) parts.push(Math.min(95, 35 + Math.log10(tr + 1) * 16))
+
+    if (!parts.length) return null
+    return Math.round(parts.reduce((a, b) => a + b, 0) / parts.length)
+  }, [domainRating, overview, pagespeedMobile, siteMetrics])
 
   useEffect(() => {
-    const timer = setTimeout(() => setAnimatedScore(score), 300)
+    setAnimatedScore(0)
+    if (score == null) return
+    const timer = setTimeout(() => setAnimatedScore(score), 200)
     return () => clearTimeout(timer)
-  }, [])
+  }, [score, domain])
 
-  const progress = (animatedScore / 100) * circumference
+  const circumference = 2 * Math.PI * 54
+  const progress = score == null ? 0 : (animatedScore / 100) * circumference
   const dashOffset = circumference - progress
+  const badge = labelForScore(score)
+  const isLoading = loading || overviewLoading
 
   return (
     <motion.div
@@ -21,28 +55,19 @@ export default function SEOHealthScore() {
       transition={{ duration: 0.4, delay: 0.1 }}
       className="bg-bg-card border border-border rounded-xl p-4 md:p-5 hover:border-border-light transition-all card-glow relative overflow-hidden"
     >
-      {/* Background glow */}
       <div className="absolute -top-12 -right-12 w-32 h-32 bg-blue-500/10 rounded-full blur-3xl pointer-events-none" />
 
-      <div className="flex items-center gap-1.5 mb-3 md:mb-4">
-        <h3 className="text-[11px] md:text-xs font-semibold tracking-wider uppercase text-fg-muted">SEO Health Score</h3>
-        <InfoIcon />
+      <div className="flex items-center justify-between gap-2 mb-3 md:mb-4">
+        <div className="flex items-center gap-1.5">
+          <h3 className="text-[11px] md:text-xs font-semibold tracking-wider uppercase text-fg-muted">SEO Health Score</h3>
+        </div>
+        {isLoading && <div className="w-3 h-3 border border-accent/40 border-t-accent rounded-full animate-spin" />}
       </div>
 
       <div className="flex items-center gap-4 md:gap-5">
-        {/* Circular Gauge */}
         <div className="relative w-[100px] h-[100px] md:w-[120px] md:h-[120px] shrink-0">
           <svg width="100%" height="100%" viewBox="0 0 120 120" className="-rotate-90 score-glow">
-            {/* Background track */}
-            <circle
-              cx="60"
-              cy="60"
-              r="54"
-              fill="none"
-              stroke="rgba(255,255,255,0.06)"
-              strokeWidth="8"
-            />
-            {/* Progress arc */}
+            <circle cx="60" cy="60" r="54" fill="none" stroke="rgba(255,255,255,0.06)" strokeWidth="8" />
             <circle
               cx="60"
               cy="60"
@@ -63,41 +88,22 @@ export default function SEOHealthScore() {
             </defs>
           </svg>
           <div className="absolute inset-0 flex flex-col items-center justify-center">
-            <span className="text-2xl md:text-3xl font-bold text-fg">{animatedScore}</span>
+            <span className="text-2xl md:text-3xl font-bold text-fg">{score == null ? '—' : animatedScore}</span>
             <span className="text-xs md:text-sm text-fg-muted">/100</span>
           </div>
         </div>
 
-        <div>
-          <p className="text-sm md:text-base font-semibold text-green">Excellent</p>
-          {/* Mini trend line */}
-          <svg width="80" height="24" viewBox="0 0 80 24" className="mt-2">
-            <polyline
-              points="0,20 10,18 20,16 30,17 40,14 50,12 60,10 70,8 80,6"
-              fill="none"
-              stroke="#94A3B8"
-              strokeWidth="1.5"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            />
-          </svg>
+        <div className="min-w-0">
+          <p className={`text-sm md:text-base font-semibold ${badge.className}`}>{badge.text}</p>
+          <p className="mt-1.5 text-[11px] md:text-xs text-fg-dim leading-relaxed">
+            {domain
+              ? score == null
+                ? 'Waiting for live DR / PSI / metrics for this domain.'
+                : 'Composite of live Domain Rating, PageSpeed and organic signals — not a canned demo score.'
+              : 'Select a project domain to compute a live health score.'}
+          </p>
         </div>
       </div>
-
-      <p className="mt-3 text-xs text-fg-muted">
-        <span className="text-green font-medium">+7 points</span>
-        {' '}vs Apr 1 – Apr 30, 2024
-      </p>
     </motion.div>
-  )
-}
-
-function InfoIcon() {
-  return (
-    <svg width="14" height="14" viewBox="0 0 14 14" fill="none" className="text-fg-dim">
-      <circle cx="7" cy="7" r="5.5" stroke="currentColor" strokeWidth="1" />
-      <path d="M7 6v3" stroke="currentColor" strokeWidth="1" strokeLinecap="round" />
-      <circle cx="7" cy="4.5" r="0.5" fill="currentColor" />
-    </svg>
   )
 }

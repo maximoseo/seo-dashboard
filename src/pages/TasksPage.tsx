@@ -62,7 +62,13 @@ export default function TasksPage() {
     onError: (err) => setActionError(err instanceof Error ? err.message : 'Update failed'),
   })
 
-  const tasks = (data?.tasks || []).filter((t) => !t.domain || canonicalizeDomain(t.domain) === clean)
+  const tasks = (data?.tasks || []).filter((t) => {
+    const td = canonicalizeDomain(t.domain || (data as any)?.domain)
+    // Require same domain when stamp is present; drop foreign items.
+    if (td) return td === clean
+    // No stamp (legacy empty local) — hide in prod-like UI to avoid cross-project.
+    return false
+  })
   const filtered = status === 'all' ? tasks : tasks.filter((t) => t.status === status)
   const dataState = error ? 'unavailable' : isLoading ? 'loading' : data?.source === 'empty' ? 'unavailable' : data ? 'live' : 'cached'
   const counts = useMemo(() => {

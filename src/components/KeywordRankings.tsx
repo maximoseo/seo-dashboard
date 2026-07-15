@@ -1,59 +1,60 @@
 import { motion } from 'framer-motion'
+import { Link } from 'react-router-dom'
+import { useMemo } from 'react'
+import { useKeywords } from '@/api/client'
+import { useSEO } from '@/contexts/SEOContext'
+import { useProject } from '@/contexts/ProjectContext'
+import { buildProjectPath } from '@/lib/projectRoutes'
+import { canonicalizeDomain } from '@/lib/domain'
 
-const keywords = [
-  {
-    keyword: 'seo tools',
-    volume: '12.1K',
-    current: 3,
-    oneMonthAgo: 4,
-    threeMonthsAgo: 7,
-    change: 2,
-    direction: 'up' as const,
-    trend: [12, 10, 9, 8, 7, 6, 5, 4, 3, 3],
-  },
-  {
-    keyword: 'keyword research',
-    volume: '8.1K',
-    current: 5,
-    oneMonthAgo: 6,
-    threeMonthsAgo: 9,
-    change: 1,
-    direction: 'up' as const,
-    trend: [14, 12, 11, 10, 9, 8, 7, 6, 5, 5],
-  },
-  {
-    keyword: 'on page seo',
-    volume: '6.6K',
-    current: 7,
-    oneMonthAgo: 6,
-    threeMonthsAgo: 5,
-    change: 1,
-    direction: 'down' as const,
-    trend: [4, 5, 5, 5, 6, 6, 6, 6, 7, 7],
-  },
-  {
-    keyword: 'technical seo',
-    volume: '4.4K',
-    current: 9,
-    oneMonthAgo: 11,
-    threeMonthsAgo: 14,
-    change: 2,
-    direction: 'up' as const,
-    trend: [18, 16, 15, 14, 13, 12, 11, 11, 9, 9],
-  },
-  {
-    keyword: 'backlink strategy',
-    volume: '3.6K',
-    current: 12,
-    oneMonthAgo: 11,
-    threeMonthsAgo: 10,
-    change: 1,
-    direction: 'down' as const,
-    trend: [8, 9, 9, 10, 10, 10, 11, 11, 12, 12],
-  },
-]
+function fmtVol(n: number | null | undefined) {
+  if (n == null || !Number.isFinite(n)) return '—'
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`
+  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`
+  return Math.round(n).toLocaleString()
+}
 
 export default function KeywordRankings() {
+  const { domain } = useSEO()
+  const { activeProject } = useProject()
+  const clean = canonicalizeDomain(domain)
+  const market = activeProject?.market || null
+  const { data, isLoading, error } = useKeywords(clean || null, market)
+
+  const keywords = useMemo(() => {
+    const rows = (data as any)?.normalized || []
+    return (Array.isArray(rows) ? rows : [])
+      .filter((k: any) => k?.keyword)
+      .map((k: any) => {
+        const current = k.position != null ? Number(k.position) : null
+        const prev = k.previousPosition != null ? Number(k.previousPosition) : null
+        let direction: 'up' | 'down' | 'flat' = 'flat'
+        let change = 0
+        if (current != null && prev != null && Number.isFinite(current) && Number.isFinite(prev)) {
+          change = Math.abs(prev - current)
+          if (current < prev) direction = 'up' // lower rank = better
+          else if (current > prev) direction = 'down'
+        }
+        return {
+          keyword: String(k.keyword),
+          volume: k.volume != null ? Number(k.volume) : null,
+          current,
+          previous: prev,
+          change,
+          direction,
+          source: k.source || null,
+        }
+      })
+      .sort((a: any, b: any) => {
+        const ap = a.current ?? 999
+        const bp = b.current ?? 999
+        return ap - bp
+      })
+      .slice(0, 5)
+  }, [data])
+
+  const keywordsHref = clean ? buildProjectPath(clean, 'keywords') : '/projects'
+
   return (
     <motion.div
       initial={{ opacity: 0, y: 20 }}
@@ -61,39 +62,42 @@ export default function KeywordRankings() {
       transition={{ duration: 0.4, delay: 0.4 }}
       className="bg-bg-card border border-border rounded-xl p-5 hover:border-border-light transition-colors overflow-hidden"
     >
-      <div className="flex items-center gap-1.5 mb-4">
-        <h3 className="text-xs font-semibold tracking-wider uppercase text-fg-muted">Keyword Rankings</h3>
-        <InfoIcon />
+      <div className="flex items-center justify-between gap-2 mb-4">
+        <div>
+          <h3 className="text-xs font-semibold tracking-wider uppercase text-fg-muted">Keyword Rankings</h3>
+          <p className="text-[11px] text-fg-dim mt-0.5">{clean || 'No domain'}</p>
+        </div>
       </div>
 
       <div className="overflow-x-auto -mx-5 px-5">
-        <table className="w-full text-sm min-w-[420px]">
+        <table className="w-full text-sm min-w-[380px]">
           <thead>
             <tr className="text-xs font-semibold tracking-wider uppercase text-fg-dim">
               <th className="text-left pb-3 pr-3">Keyword</th>
               <th className="text-right pb-3 px-2">Volume</th>
-              <th className="text-right pb-3 px-2">Current</th>
-              <th className="text-right pb-3 px-2">1M Ago</th>
-              <th className="text-right pb-3 px-2">3M Ago</th>
-              <th className="text-right pb-3 pl-2">Trend</th>
+              <th className="text-right pb-3 px-2">Pos</th>
+              <th className="text-right pb-3 pl-2">Δ</th>
             </tr>
           </thead>
           <tbody>
             {keywords.map((kw) => (
               <tr key={kw.keyword} className="border-t border-border hover:bg-white/[0.02] transition-colors">
-                <td className="py-2.5 pr-3 text-fg font-medium">{kw.keyword}</td>
-                <td className="py-2.5 px-2 text-right text-fg-muted">{kw.volume}</td>
-                <td className="py-2.5 px-2 text-right">
-                  <span className="text-fg font-medium">{kw.current}</span>
-                  {' '}
-                  <span className={`text-xs font-medium ${kw.direction === 'up' ? 'text-green' : 'text-red'}`}>
-                    {kw.direction === 'up' ? '\u2191' : '\u2193'}{kw.change}
-                  </span>
+                <td className="py-2.5 pr-3 text-fg font-medium max-w-[180px] truncate" title={kw.keyword}>
+                  {kw.keyword}
                 </td>
-                <td className="py-2.5 px-2 text-right text-fg-muted">{kw.oneMonthAgo}</td>
-                <td className="py-2.5 px-2 text-right text-fg-muted">{kw.threeMonthsAgo}</td>
-                <td className="py-2.5 pl-2">
-                  <MiniTrend data={kw.trend} direction={kw.direction} />
+                <td className="py-2.5 px-2 text-right text-fg-muted tabular-nums">{fmtVol(kw.volume)}</td>
+                <td className="py-2.5 px-2 text-right text-fg font-medium tabular-nums">
+                  {kw.current != null ? kw.current : '—'}
+                </td>
+                <td className="py-2.5 pl-2 text-right">
+                  {kw.direction === 'flat' || kw.change === 0 ? (
+                    <span className="text-xs text-fg-dim">—</span>
+                  ) : (
+                    <span className={`text-xs font-medium ${kw.direction === 'up' ? 'text-green' : 'text-red-400'}`}>
+                      {kw.direction === 'up' ? '↑' : '↓'}
+                      {kw.change}
+                    </span>
+                  )}
                 </td>
               </tr>
             ))}
@@ -101,54 +105,19 @@ export default function KeywordRankings() {
         </table>
       </div>
 
-      <button className="mt-4 text-sm font-medium text-accent hover:text-accent-light transition-colors flex items-center gap-1">
+      {!isLoading && keywords.length === 0 && (
+        <p className="text-xs md:text-sm text-fg-muted mt-3">
+          {error ? 'Could not load keywords for this domain.' : 'No live keyword rankings for this domain yet.'}
+        </p>
+      )}
+      {isLoading && <p className="text-xs text-fg-dim mt-3">Loading keywords…</p>}
+
+      <Link to={keywordsHref} className="mt-4 text-sm font-medium text-accent hover:text-accent-light transition-colors inline-flex items-center gap-1">
         View all keywords
         <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
           <path d="M5 3l4 4-4 4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
         </svg>
-      </button>
+      </Link>
     </motion.div>
-  )
-}
-
-function MiniTrend({ data, direction }: { data: number[]; direction: 'up' | 'down' }) {
-  const max = Math.max(...data)
-  const min = Math.min(...data)
-  const range = max - min || 1
-  const h = 20
-  const w = 60
-
-  // For rankings, lower is better, so invert
-  const points = data
-    .map((v, i) => {
-      const x = (i / (data.length - 1)) * w
-      const y = ((v - min) / range) * (h - 4) + 2
-      return `${x},${y}`
-    })
-    .join(' ')
-
-  const color = direction === 'up' ? '#22C55E' : '#EF4444'
-
-  return (
-    <svg width={w} height={h} viewBox={`0 0 ${w} ${h}`} className="inline-block">
-      <polyline
-        points={points}
-        fill="none"
-        stroke={color}
-        strokeWidth="1.5"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      />
-    </svg>
-  )
-}
-
-function InfoIcon() {
-  return (
-    <svg width="14" height="14" viewBox="0 0 14 14" fill="none" className="text-fg-dim">
-      <circle cx="7" cy="7" r="5.5" stroke="currentColor" strokeWidth="1" />
-      <path d="M7 6v3" stroke="currentColor" strokeWidth="1" strokeLinecap="round" />
-      <circle cx="7" cy="4.5" r="0.5" fill="currentColor" />
-    </svg>
   )
 }

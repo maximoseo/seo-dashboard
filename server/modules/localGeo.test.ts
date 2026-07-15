@@ -44,7 +44,10 @@ describe('local + GEO modules', () => {
       },
     })
     expect(geo.checks.find((c) => c.name === 'AI Overview visibility')?.status).toBe('live')
-    expect(geo.readinessScore).toBeGreaterThanOrEqual(60)
+    // readiness = (live|partial checks) / total checks. With AIO + citations + llms live/partial: >=50, and higher than a no-spine baseline.
+    const baseline = buildGeoAiOverview({ domain: 'example.com', market: 'United States', snapshotMeta: {} })
+    expect(geo.readinessScore).toBeGreaterThanOrEqual(50)
+    expect(geo.readinessScore).toBeGreaterThan(baseline.readinessScore)
     expect(geo.checks.find((c) => c.name === 'llms.txt expectation')?.status).toBe('live')
   })
 })

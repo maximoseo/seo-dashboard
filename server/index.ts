@@ -3522,48 +3522,66 @@ app.get('/api/clients', async (_req, res) => {
 })
 
 app.get('/api/tasks', async (req, res) => {
-  const { domain = 'maximo-seo.ai' } = req.query as Record<string, string>
-  const cleanDomain = String(domain).replace(/^https?:\/\//, '').replace(/\/$/, '')
+  const { domain } = req.query as Record<string, string>
+  if (!domain?.trim()) {
+    return res.status(400).json({ error: 'domain required', tasks: [], source: 'error' })
+  }
+  const cleanDomain = canonicalizeDomain(domain)
+  if (!cleanDomain) {
+    return res.status(400).json({ error: 'invalid domain', tasks: [], source: 'error' })
+  }
 
   if (supabaseAdmin) {
     try {
-      const { data: domainRow } = await supabaseAdmin
+      const { data: domainRows } = await supabaseAdmin
         .from('seo_domains')
         .select('id, domain')
-        .eq('domain', cleanDomain)
-        .maybeSingle()
+        .ilike('domain', cleanDomain)
+        .limit(5)
+      const domainRow =
+        (domainRows || []).find((r: any) => canonicalizeDomain(r.domain) === cleanDomain) ||
+        domainRows?.[0]
       if (domainRow?.id) {
         const { data: tasks } = await supabaseAdmin
           .from('seo_tasks')
-          .select('id, title, status, priority, brief, acceptance_criteria, alert_id, created_at, updated_at')
+          .select('id, title, status, priority, brief, acceptance_criteria, alert_id, domain_id, created_at, updated_at')
           .eq('domain_id', domainRow.id)
           .order('created_at', { ascending: false })
           .limit(50)
-        if (tasks && tasks.length > 0) {
-          return res.json({
-            tasks: tasks.map((t: any) => ({
-              id: t.id,
-              title: t.title,
-              status: t.status,
-              priority: t.priority,
-              brief: t.brief,
-              acceptanceCriteria: t.acceptance_criteria || [],
-              alertId: t.alert_id,
-              createdAt: t.created_at,
-            })),
-            source: 'supabase',
-            fetchedAt: new Date().toISOString(),
-          })
-        }
+        return res.json({
+          domain: cleanDomain,
+          requestedDomain: domain,
+          canonicalDomain: cleanDomain,
+          tasks: (tasks || []).map((t: any) => ({
+            id: t.id,
+            domain: cleanDomain,
+            title: t.title,
+            status: t.status,
+            priority: t.priority,
+            brief: t.brief,
+            acceptanceCriteria: t.acceptance_criteria || [],
+            alertId: t.alert_id,
+            createdAt: t.created_at,
+          })),
+          source: 'supabase',
+          dataState: (tasks || []).length ? 'live' : 'unavailable',
+          message: (tasks || []).length
+            ? undefined
+            : 'No durable tasks for this domain. Run Sync spine to generate from live alerts.',
+          fetchedAt: new Date().toISOString(),
+        })
       }
     } catch (err) {
       console.error('[tasks] durable load failed', err)
     }
   }
 
-  // Prod: never invent fake investigation tasks from synthetic alerts.
+  // Prod + any non-seed env: never invent fake investigation tasks from synthetic alerts.
   if (IS_PROD || !ALLOW_LOCAL_SEED) {
     return res.json({
+      domain: cleanDomain,
+      requestedDomain: domain,
+      canonicalDomain: cleanDomain,
       tasks: [],
       source: 'empty',
       dataState: 'unavailable',
@@ -3572,6 +3590,7 @@ app.get('/api/tasks', async (req, res) => {
     })
   }
 
+  // Local-dev only fallback — still stamp domain on every task.
   const seedAlerts = generateAlerts({
     domain: cleanDomain,
     previousOrganicTraffic: 1000,
@@ -3580,8 +3599,11 @@ app.get('/api/tasks', async (req, res) => {
     performanceScore: 62,
   })
   res.json({
+    domain: cleanDomain,
+    requestedDomain: domain,
+    canonicalDomain: cleanDomain,
     tasks: seedAlerts.map(createSeoTaskFromAlert),
-    source: 'rules-engine',
+    source: 'rules-engine-local',
     dataState: 'demo',
     fetchedAt: new Date().toISOString(),
   })

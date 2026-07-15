@@ -1,10 +1,13 @@
 import { useEffect, useMemo, useState } from 'react'
 import { DataCard } from '@/components/DataCard'
 import DataStateBadge from '@/components/DataStateBadge'
+import DomainIntegrityBar from '@/components/DomainIntegrityBar'
 import { useSEO } from '@/contexts/SEOContext'
 import { useProject } from '@/contexts/ProjectContext'
 import { authFetch } from '@/lib/authToken'
 import { readApiError } from '@/lib/apiErrors'
+import { canonicalizeDomain } from '@/lib/domain'
+import { useDomainSwitchCleanup } from '@/lib/useDomainQuery'
 
 type Locale = 'he' | 'en'
 type TemplateId = 'weekly' | 'monthly' | 'executive' | 'local-geo'
@@ -41,6 +44,8 @@ export default function ReportsPage() {
   const { domain } = useSEO()
   const { activeProject } = useProject()
   const projectMarket = activeProject?.market || null
+  const clean = canonicalizeDomain(domain)
+  useDomainSwitchCleanup(domain)
 
   const [locale, setLocale] = useState<Locale>('he')
   const [template, setTemplate] = useState<TemplateId>('monthly')
@@ -52,6 +57,16 @@ export default function ReportsPage() {
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
   const [sharing, setSharing] = useState(false)
+  const [payloadDomain, setPayloadDomain] = useState<string | null>(null)
+
+  useEffect(() => {
+    setMarkdown('')
+    setHtml('')
+    setSections([])
+    setShareUrl(null)
+    setError(null)
+    setPayloadDomain(null)
+  }, [clean])
 
   useEffect(() => {
     void authFetch('/api/reports/templates')
@@ -64,6 +79,10 @@ export default function ReportsPage() {
   }, [])
 
   const generate = async (format: 'json' | 'html' | 'md' = 'json') => {
+    if (!clean) {
+      setError('Select a project domain before generating a report.')
+      return
+    }
     setLoading(true)
     setError(null)
     setShareUrl(null)
@@ -72,7 +91,7 @@ export default function ReportsPage() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          domain,
+          domain: clean,
           locale,
           template,
           market: projectMarket,
@@ -98,6 +117,11 @@ export default function ReportsPage() {
         return
       }
       const body = (await res.json()) as PreviewResponse
+      const claimed = canonicalizeDomain(body.domain)
+      if (claimed && claimed !== clean) {
+        throw new Error(`Report domain mismatch: ${claimed} != ${clean}`)
+      }
+      setPayloadDomain(claimed || clean)
       setMarkdown(body.markdown || '')
       setHtml(body.html || '')
       setSections(body.sections || [])
@@ -110,6 +134,10 @@ export default function ReportsPage() {
   }
 
   const createShare = async () => {
+    if (!clean) {
+      setError('Select a project domain before sharing a report.')
+      return
+    }
     setSharing(true)
     setError(null)
     try {
@@ -117,7 +145,7 @@ export default function ReportsPage() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          domain,
+          domain: clean,
           locale,
           template,
           market: projectMarket,
@@ -173,18 +201,33 @@ export default function ReportsPage() {
     URL.revokeObjectURL(url)
   }
 
-  const state = error ? 'unavailable' : markdown || html ? 'live' : loading ? 'loading' : 'planned'
+  const state = !clean
+    ? 'unavailable'
+    : error
+      ? 'unavailable'
+      : markdown || html
+        ? 'live'
+        : loading
+          ? 'loading'
+          : 'planned'
   const dir = locale === 'he' ? 'rtl' : 'ltr'
 
   const templateCards = useMemo(() => templates, [templates])
 
   return (
     <div className="max-w-[1400px] space-y-4 lg:space-y-5">
+      <DomainIntegrityBar
+        activeDomain={clean}
+        payloadDomain={payloadDomain || clean}
+        dataState={state as any}
+        rowCount={sections.length || (markdown ? 1 : 0)}
+        extra={clean ? `report scope · ${clean}` : 'no domain'}
+      />
       <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h2 className="text-base font-semibold text-fg md:text-lg">Reports</h2>
           <p className="mt-0.5 text-xs text-fg-muted md:text-sm">
-            תבניות דוח (עברית/EN), HTML להדפסה/PDF, וקישור שיתוף ל־{domain}
+            תבניות דוח (עברית/EN), HTML להדפסה/PDF, וקישור שיתוף ל־{clean || '—'}
           </p>
         </div>
         <DataStateBadge state={state as any} source="report API" />
@@ -197,7 +240,7 @@ export default function ReportsPage() {
           <div className="flex flex-wrap gap-2">
             <button
               onClick={() => void generate('json')}
-              disabled={loading}
+              disabled={loading || !clean}
               className="rounded-lg border border-accent/30 bg-accent/10 px-3 py-1.5 text-xs font-medium text-accent-light disabled:opacity-50"
             >
               {loading ? 'Generating…' : 'Generate'}
@@ -207,7 +250,7 @@ export default function ReportsPage() {
             </button>
             <button
               onClick={() => void createShare()}
-              disabled={sharing}
+              disabled={sharing || !clean}
               className="rounded-lg border border-blue-400/30 bg-blue-400/10 px-3 py-1.5 text-xs font-medium text-blue-100 disabled:opacity-50"
             >
               {sharing ? 'Sharing…' : 'Share link'}

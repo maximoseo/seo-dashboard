@@ -15,6 +15,7 @@ import {
 import { fetchDomainOverview, type SemrushDomainOverview } from '@/services/semrushApi'
 import { fetchPageSpeed, type PageSpeedResult } from '@/services/pagespeedApi'
 import { useProject } from '@/contexts/ProjectContext'
+import { canonicalizeDomain } from '@/lib/domain'
 
 interface AhrefsData {
   loading: boolean
@@ -56,7 +57,7 @@ export function useAhrefs() {
 
 export function AhrefsProvider({ children }: { children: ReactNode }) {
   const { activeDomain, activeProject, workspaceEpoch } = useProject()
-  const target = activeDomain || activeProject?.domain || ''
+  const target = canonicalizeDomain(activeDomain || activeProject?.domain || '')
   const market = activeProject?.market || null
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -70,6 +71,20 @@ export function AhrefsProvider({ children }: { children: ReactNode }) {
   const [pagespeedMobile, setPagespeedMobile] = useState<PageSpeedResult | null>(null)
   const [activeSources, setActiveSources] = useState<string[]>([])
 
+  // Hard-reset metrics as soon as domain changes to avoid cross-project bleed
+  useEffect(() => {
+    setDomainRating(null)
+    setSiteMetrics(null)
+    setBacklinksStats(null)
+    setOrganicKeywords([])
+    setRefDomains([])
+    setSemrushOverview(null)
+    setPagespeedDesktop(null)
+    setPagespeedMobile(null)
+    setActiveSources([])
+    setError(null)
+  }, [target, workspaceEpoch])
+
   useEffect(() => {
     let cancelled = false
 
@@ -77,15 +92,6 @@ export function AhrefsProvider({ children }: { children: ReactNode }) {
       if (!target) {
         setLoading(false)
         setError(null)
-        setDomainRating(null)
-        setSiteMetrics(null)
-        setBacklinksStats(null)
-        setOrganicKeywords([])
-        setRefDomains([])
-        setSemrushOverview(null)
-        setPagespeedDesktop(null)
-        setPagespeedMobile(null)
-        setActiveSources([])
         return
       }
       setLoading(true)
