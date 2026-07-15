@@ -176,7 +176,7 @@ function DashboardShellInner() {
         onMobileClose={() => setSidebarOpen(false)}
       />
 
-      <main className="flex-1 lg:ml-[232px] pb-24 lg:pb-0 overflow-x-hidden">
+      <main className="flex-1 lg:ml-[232px] pb-24 lg:pb-0 overflow-x-clip min-w-0">
         <TopBar
           title={pageInfo.title}
           subtitle={pageInfo.subtitle}
