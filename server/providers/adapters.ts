@@ -633,8 +633,41 @@ export function computeLinkIntel(input: {
   topRelevant: Array<{ domain: string; rank: number; backlinks: number; quality: string; source?: string }>
   summary: { relevant: number; risky: number; spam: number; strengthen: number; cleanup: number }
 } {
-  const refs = Array.isArray(input.refdomains) ? input.refdomains : []
+  let refs = Array.isArray(input.refdomains) ? [...input.refdomains] : []
   const links = Array.isArray(input.normalizedLinks) ? input.normalizedLinks : []
+
+  // If RD list empty, derive coarse domains from link sample so operators still get opportunities.
+  if (!refs.length && links.length) {
+    const map = new Map<string, any>()
+    for (const link of links) {
+      const domain = String(link.domain_from || '')
+        .replace(/^www\./, '')
+        .toLowerCase()
+      if (!domain) continue
+      const prev = map.get(domain)
+      const rank = Number(link.rank || 0) || 0
+      const quality = String(link.quality || 'relevant')
+      if (!prev) {
+        map.set(domain, {
+          domain,
+          rank,
+          backlinks: 1,
+          dofollow: link.dofollow ? 1 : 0,
+          quality,
+          first_seen: link.first_seen || '',
+          source: link.source,
+        })
+      } else {
+        prev.backlinks += 1
+        prev.rank = Math.max(prev.rank, rank)
+        if (link.dofollow) prev.dofollow = Number(prev.dofollow || 0) + 1
+        if (quality === 'spam') prev.quality = 'spam'
+        else if (quality === 'risky' && prev.quality !== 'spam') prev.quality = 'risky'
+      }
+    }
+    refs = Array.from(map.values())
+  }
+
   const opportunities: LinkOpportunity[] = []
   let relevant = 0
   let risky = 0
