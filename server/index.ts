@@ -38,6 +38,7 @@ import { resolveMarket, serankingResearchUrl } from './markets/resolveMarket.js'
 import {
   backlinksFromSerpstat,
   computeCompetitorGaps,
+  computeKeywordIntel,
   competitorsFromDataForSEO,
   competitorsFromExa,
   competitorsFromSemrush,
@@ -1452,6 +1453,8 @@ app.get('/api/keywords/aggregated', expensiveLimiter, async (req, res) => {
       if (Array.isArray(snap.normalized)) {
         const kwIntegrity = filterKeywordsForDomain(snap.normalized, domain)
         snap.normalized = kwIntegrity.rows
+        snap.movements = snap.movements || keywordMovements(kwIntegrity.rows)
+        snap.intel = computeKeywordIntel(kwIntegrity.rows)
         return res.json(stampPayload(snap, domain, { foreignRowsDropped: kwIntegrity.foreignRowsDropped }))
       }
       return res.json(stampPayload(snap, domain))
@@ -1576,6 +1579,7 @@ app.get('/api/keywords/aggregated', expensiveLimiter, async (req, res) => {
   const kwIntegrity = filterKeywordsForDomain(keywords, domain)
   result.normalized = kwIntegrity.rows
   result.movements = keywordMovements(kwIntegrity.rows)
+  result.intel = computeKeywordIntel(kwIntegrity.rows)
   const stamped = stampPayload(result, domain, {
     foreignRowsDropped: kwIntegrity.foreignRowsDropped,
     selfRowsDropped: 0,
@@ -3100,6 +3104,15 @@ app.get('/api/competitors/aggregated', expensiveLimiter, async (req, res) => {
       if (Array.isArray(snap.normalized)) {
         const compIntegrity = filterCompetitorsForDomain(snap.normalized, domain)
         snap.normalized = compIntegrity.rows
+        // Recompute gap cards with latest keyword spine when cached competitor payload is reused.
+        try {
+          const kwSnap = await loadSnapshotPayload(domain, 'keywords_agg')
+          if (Array.isArray(kwSnap?.data?.normalized)) {
+            snap.gaps = computeCompetitorGaps(kwSnap.data.normalized as KeywordRow[], compIntegrity.rows)
+          }
+        } catch {
+          // keep existing gaps if any
+        }
         return res.json(stampPayload(snap, domain, {
           giantsDropped: compIntegrity.giantsDropped,
           selfRowsDropped: compIntegrity.selfRowsDropped,

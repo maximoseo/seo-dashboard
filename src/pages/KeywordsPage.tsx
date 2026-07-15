@@ -193,6 +193,8 @@ export default function KeywordsPage() {
   const [page, setPage] = useState(1)
   const [syncing, setSyncing] = useState(false)
   const [expanded, setExpanded] = useState<string | null>(null)
+  const [oppFilter, setOppFilter] = useState<'all' | 'striking_distance' | 'quick_win' | 'value_upside' | 'decay'>('all')
+  const [intelTab, setIntelTab] = useState<'opportunities' | 'pages' | 'cannibalization'>('opportunities')
   const { pageSize, setPageSize } = usePageSize('keywords')
   const qc = useQueryClient()
   const isDesktop = useIsDesktop()
@@ -292,6 +294,7 @@ export default function KeywordsPage() {
   const safeKeywords = keywordsIntegrity.rows
 
   const movements = apiData?.movements || null
+  const intel = (apiData as any)?.intel || null
   const activeSources: string[] = Array.isArray(apiData?.activeSources) ? apiData.activeSources : []
   const softDegraded = Array.isArray(apiData?.softDegraded) ? apiData.softDegraded : []
   const marketLabel = apiData?.market?.label || null
@@ -300,6 +303,80 @@ export default function KeywordsPage() {
     : dataUpdatedAt
       ? new Date(dataUpdatedAt).toLocaleString()
       : null
+
+  // Client fallback intel if older cache lacks server intel payload
+  const clientIntel = useMemo(() => {
+    if (intel?.positionDistribution) return intel
+    const rows = safeKeywords.map((k) => ({
+      keyword: k.keyword,
+      position: k.position || null,
+      previousPosition: k.previousPosition,
+      volume: k.volume || null,
+      difficulty: k.difficulty || null,
+      traffic: k.traffic || null,
+      url: k.url || null,
+      cpc: k.cpc || null,
+      trend: k.trend,
+      source: k.source,
+    }))
+    // minimal local derivation for distribution only
+    const ranked = rows.filter((r) => r.position && r.position > 0)
+    const buckets = [
+      { key: '1-3', label: 'Top 3', min: 1, max: 3 },
+      { key: '4-10', label: '4–10', min: 4, max: 10 },
+      { key: '11-20', label: '11–20', min: 11, max: 20 },
+      { key: '21-50', label: '21–50', min: 21, max: 50 },
+      { key: '51-100', label: '51–100', min: 51, max: 100 },
+    ].map((b) => {
+      const inBucket = ranked.filter((r) => Number(r.position) >= b.min && Number(r.position) <= b.max)
+      return {
+        ...b,
+        count: inBucket.length,
+        volume: inBucket.reduce((s, r) => s + (Number(r.volume) || 0), 0),
+        traffic: inBucket.reduce((s, r) => s + (Number(r.traffic) || 0), 0),
+        share: ranked.length ? inBucket.length / ranked.length : 0,
+      }
+    })
+    return {
+      positionDistribution: buckets,
+      opportunities: ranked
+        .filter((r) => Number(r.position) >= 11 && Number(r.position) <= 20 && (Number(r.volume) || 0) >= 20)
+        .slice(0, 20)
+        .map((r) => ({
+          keyword: r.keyword,
+          position: Number(r.position),
+          previousPosition: r.previousPosition,
+          volume: r.volume,
+          traffic: r.traffic,
+          difficulty: r.difficulty,
+          cpc: r.cpc,
+          url: r.url,
+          source: r.source,
+          score: Number(r.volume) || 0,
+          kind: 'striking_distance' as const,
+          reason: `Pos #${r.position} — striking distance (client fallback)`,
+        })),
+      cannibalization: [],
+      pageClusters: [],
+      kpis: {
+        tracked: rows.length,
+        ranked: ranked.length,
+        top3: ranked.filter((r) => Number(r.position) <= 3).length,
+        top10: ranked.filter((r) => Number(r.position) <= 10).length,
+        top20: ranked.filter((r) => Number(r.position) <= 20).length,
+        strikingDistance: ranked.filter((r) => Number(r.position) >= 11 && Number(r.position) <= 20).length,
+        cannibalized: 0,
+        totalVolume: rows.reduce((s, r) => s + (Number(r.volume) || 0), 0),
+        totalTraffic: rows.reduce((s, r) => s + (Number(r.traffic) || 0), 0),
+      },
+    }
+  }, [intel, safeKeywords])
+
+  const filteredOpps = useMemo(() => {
+    const rows = clientIntel?.opportunities || []
+    if (oppFilter === 'all') return rows
+    return rows.filter((o: any) => o.kind === oppFilter)
+  }, [clientIntel, oppFilter])
 
   const availableSources = useMemo(() => {
     const set = new Set<ProviderKey>()
@@ -520,6 +597,194 @@ export default function KeywordsPage() {
               </div>
             </div>
           ))}
+        </div>
+      ) : null}
+
+      {/* Rank distribution — Ahrefs/SEMrush style */}
+      {clientIntel?.positionDistribution?.length ? (
+        <div className="bg-bg-card border border-border rounded-xl p-3.5 md:p-4">
+          <div className="flex items-center justify-between gap-2 mb-3">
+            <div>
+              <p className="text-[10px] md:text-xs font-semibold uppercase tracking-wider text-fg-muted">Position distribution</p>
+              <p className="text-[11px] text-fg-dim mt-0.5">
+                {clientIntel.kpis?.ranked || 0} ranked · striking distance {clientIntel.kpis?.strikingDistance || 0}
+                {clientIntel.kpis?.cannibalized ? ` · cannibal ${clientIntel.kpis.cannibalized}` : ''}
+              </p>
+            </div>
+          </div>
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2.5">
+            {clientIntel.positionDistribution.map((b: any) => (
+              <button
+                key={b.key}
+                type="button"
+                onClick={() => {
+                  if (b.key === '1-3') setPosFilter('top3')
+                  else if (b.key === '4-10') setPosFilter('top10')
+                  else if (b.key === '11-20') setPosFilter('top20')
+                  else if (b.key === '21-50') setPosFilter('top50')
+                  else setPosFilter('51-100')
+                  setPage(1)
+                }}
+                className="rounded-xl border border-border bg-bg-darkest p-3 text-left hover:border-accent/40 transition-colors"
+              >
+                <p className="text-[10px] uppercase tracking-wider text-fg-dim">{b.label}</p>
+                <p className="text-xl font-bold tabular-nums text-fg mt-1">{b.count}</p>
+                <div className="mt-2 h-1.5 rounded-full bg-white/[0.06] overflow-hidden">
+                  <div className="h-full bg-accent rounded-full" style={{ width: `${Math.max(4, Math.round((b.share || 0) * 100))}%` }} />
+                </div>
+                <p className="text-[10px] text-fg-dim mt-1.5 tabular-nums">
+                  {Math.round((b.share || 0) * 100)}% · SV {formatMetric(Math.round(b.volume || 0))}
+                </p>
+              </button>
+            ))}
+          </div>
+        </div>
+      ) : null}
+
+      {/* Opportunities / page clusters / cannibalization */}
+      {(filteredOpps.length > 0 || clientIntel?.pageClusters?.length || clientIntel?.cannibalization?.length) ? (
+        <div className="bg-bg-card border border-border rounded-xl p-3.5 md:p-4 space-y-3">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+            <div>
+              <p className="text-[10px] md:text-xs font-semibold uppercase tracking-wider text-fg-muted">Keyword opportunities</p>
+              <p className="text-[11px] text-fg-dim mt-0.5">Derived from live ranks only — no invented SERP volumes</p>
+            </div>
+            <div className="flex flex-wrap gap-1.5">
+              {([
+                ['opportunities', 'Opportunities'],
+                ['pages', 'Landing pages'],
+                ['cannibalization', 'Cannibalization'],
+              ] as const).map(([id, label]) => (
+                <button
+                  key={id}
+                  type="button"
+                  onClick={() => setIntelTab(id)}
+                  className={`px-2.5 py-1 rounded-lg text-[11px] border transition-colors ${
+                    intelTab === id
+                      ? 'border-accent/40 bg-accent/15 text-accent-light'
+                      : 'border-border text-fg-muted hover:text-fg'
+                  }`}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {intelTab === 'opportunities' && (
+            <>
+              <div className="flex flex-wrap gap-1.5">
+                {([
+                  ['all', 'All'],
+                  ['striking_distance', 'Striking distance'],
+                  ['quick_win', 'Quick wins'],
+                  ['value_upside', 'Value upside'],
+                  ['decay', 'Decay'],
+                ] as const).map(([id, label]) => (
+                  <button
+                    key={id}
+                    type="button"
+                    onClick={() => setOppFilter(id)}
+                    className={`px-2 py-1 rounded-md text-[10px] border ${
+                      oppFilter === id
+                        ? 'border-accent/40 bg-accent/10 text-accent-light'
+                        : 'border-border text-fg-dim'
+                    }`}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+              <div className="space-y-2 max-h-80 overflow-auto">
+                {filteredOpps.slice(0, 15).map((o: any) => (
+                  <div key={`${o.kind}-${o.keyword}`} className="rounded-xl border border-border bg-bg-darkest px-3 py-2.5">
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="min-w-0">
+                        <p className="text-sm font-medium text-fg truncate">{o.keyword}</p>
+                        <p className="text-[11px] text-fg-dim mt-0.5 line-clamp-2">{o.reason}</p>
+                      </div>
+                      <div className="text-right shrink-0">
+                        <span className="text-[10px] uppercase tracking-wider text-fg-dim">{String(o.kind).replace('_', ' ')}</span>
+                        <p className="text-sm font-semibold tabular-nums text-fg">#{o.position}</p>
+                      </div>
+                    </div>
+                    <div className="mt-2 flex flex-wrap gap-2 text-[11px] text-fg-muted">
+                      {o.volume != null && <span>SV {formatMetric(o.volume)}</span>}
+                      {o.traffic != null && <span>Traffic {formatMetric(o.traffic)}</span>}
+                      {o.cpc != null && Number(o.cpc) > 0 && <span>CPC ${Number(o.cpc).toFixed(2)}</span>}
+                      {o.url && (
+                        <a href={o.url.startsWith('http') ? o.url : `https://${o.url}`} target="_blank" rel="noopener noreferrer" className="text-accent truncate max-w-[220px]">
+                          {String(o.url).replace(/^https?:\/\//, '')}
+                        </a>
+                      )}
+                    </div>
+                  </div>
+                ))}
+                {!filteredOpps.length && <p className="text-xs text-fg-dim py-2">No opportunities in this bucket for the current inventory.</p>}
+              </div>
+            </>
+          )}
+
+          {intelTab === 'pages' && (
+            <div className="space-y-2 max-h-80 overflow-auto">
+              {(clientIntel?.pageClusters || []).slice(0, 12).map((p: any) => (
+                <div key={p.url} className="rounded-xl border border-border bg-bg-darkest px-3 py-2.5">
+                  <div className="flex items-start justify-between gap-2">
+                    <a
+                      href={p.url.startsWith('http') ? p.url : `https://${p.url}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-sm font-medium text-fg truncate hover:text-accent"
+                    >
+                      {String(p.url).replace(/^https?:\/\//, '')}
+                    </a>
+                    <span className="text-xs tabular-nums text-fg-muted shrink-0">{p.keywords} KW</span>
+                  </div>
+                  <div className="mt-1.5 flex flex-wrap gap-2 text-[11px] text-fg-dim">
+                    <span>Best #{p.bestPosition ?? '—'}</span>
+                    <span>Top10 {p.top10}</span>
+                    <span>SV {formatMetric(p.volume || 0)}</span>
+                    <span>Traffic {formatMetric(p.traffic || 0)}</span>
+                  </div>
+                  {!!p.sampleKeywords?.length && (
+                    <p className="mt-1 text-[11px] text-fg-muted truncate">e.g. {p.sampleKeywords.join(' · ')}</p>
+                  )}
+                </div>
+              ))}
+              {!clientIntel?.pageClusters?.length && (
+                <p className="text-xs text-fg-dim py-2">No landing-page clusters yet — need keywords with target URLs.</p>
+              )}
+            </div>
+          )}
+
+          {intelTab === 'cannibalization' && (
+            <div className="space-y-2 max-h-80 overflow-auto">
+              {(clientIntel?.cannibalization || []).slice(0, 12).map((c: any) => (
+                <div key={c.keyword} className="rounded-xl border border-border bg-bg-darkest px-3 py-2.5">
+                  <div className="flex items-start justify-between gap-2">
+                    <p className="text-sm font-medium text-fg">{c.keyword}</p>
+                    <span className="text-xs tabular-nums text-amber-300 shrink-0">{c.urls?.length || 0} URLs</span>
+                  </div>
+                  <p className="text-[11px] text-fg-dim mt-1">
+                    Best #{c.bestPosition ?? '—'}
+                    {c.volume != null ? ` · SV ${formatMetric(c.volume)}` : ''}
+                  </p>
+                  <ul className="mt-1.5 space-y-0.5">
+                    {(c.urls || []).slice(0, 4).map((u: string) => (
+                      <li key={u} className="text-[11px] text-fg-muted truncate">
+                        {u.replace(/^https?:\/\//, '')}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              ))}
+              {!clientIntel?.cannibalization?.length && (
+                <p className="text-xs text-fg-dim py-2">
+                  No multi-URL cannibalization signals detected in the merged inventory.
+                </p>
+              )}
+            </div>
+          )}
         </div>
       ) : null}
 

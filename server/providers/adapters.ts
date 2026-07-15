@@ -459,13 +459,283 @@ export function computeCompetitorGaps(ourKeywords: KeywordRow[], competitors: Co
   competitor: string
   ourMissingEstimate: number | null
   note: string
+  commonKeywords: number | null
+  competitorTraffic: number | null
+  relevance: number | null
 }> {
   const ourSet = new Set(ourKeywords.map((k) => k.keyword.toLowerCase()))
-  return competitors.slice(0, 10).map((c) => ({
-    competitor: c.domain,
-    ourMissingEstimate: c.commonKeywords != null ? Math.max(0, Math.round(c.commonKeywords * 0.35)) : null,
-    note: ourSet.size
-      ? `Shared-keyword retailer estimate vs our ${ourSet.size} tracked keywords — full gap table needs SERP overlap API pull.`
-      : 'Pin competitors + refresh keywords to estimate gaps.',
-  }))
+  // Prefer competitors with real overlap signals; exclude undifferentiable giant placeholders already filtered upstream.
+  return competitors
+    .slice()
+    .sort((a, b) => (b.commonKeywords ?? 0) - (a.commonKeywords ?? 0) || (b.traffic ?? 0) - (a.traffic ?? 0))
+    .slice(0, 12)
+    .map((c) => ({
+      competitor: c.domain,
+      commonKeywords: c.commonKeywords,
+      competitorTraffic: c.traffic,
+      relevance: c.relevance ?? c.competitionLevel,
+      ourMissingEstimate: c.commonKeywords != null ? Math.max(0, Math.round(c.commonKeywords * 0.35)) : null,
+      note: ourSet.size
+        ? `Shared-keyword retailer estimate vs our ${ourSet.size} tracked keywords — full gap table needs SERP overlap API pull.`
+        : 'Pin competitors + refresh keywords to estimate gaps.',
+    }))
+}
+
+export type RankBucket = {
+  key: string
+  label: string
+  min: number
+  max: number
+  count: number
+  volume: number
+  traffic: number
+  share: number
+}
+
+export type KeywordOpportunity = {
+  keyword: string
+  position: number
+  previousPosition: number | null
+  volume: number | null
+  traffic: number | null
+  difficulty: number | null
+  cpc: number | null
+  url: string | null
+  source: string
+  score: number
+  kind: 'striking_distance' | 'quick_win' | 'value_upside' | 'decay'
+  reason: string
+}
+
+export type CannibalCluster = {
+  keyword: string
+  urls: string[]
+  bestPosition: number | null
+  volume: number | null
+  sources: string[]
+}
+
+export type PageCluster = {
+  url: string
+  keywords: number
+  top3: number
+  top10: number
+  volume: number
+  traffic: number
+  bestPosition: number | null
+  sampleKeywords: string[]
+}
+
+/**
+ * Ahrefs/SEMrush-style keyword intel derived only from rows we already have.
+ * Never invent volumes/ranks — empty buckets when no position evidence.
+ */
+export function computeKeywordIntel(rows: KeywordRow[]): {
+  positionDistribution: RankBucket[]
+  opportunities: KeywordOpportunity[]
+  cannibalization: CannibalCluster[]
+  pageClusters: PageCluster[]
+  kpis: {
+    tracked: number
+    ranked: number
+    top3: number
+    top10: number
+    top20: number
+    strikingDistance: number
+    cannibalized: number
+    totalVolume: number
+    totalTraffic: number
+  }
+} {
+  const list = Array.isArray(rows) ? rows : []
+  const ranked = list.filter((r) => r.position != null && Number(r.position) > 0)
+  const bucketsDef: Array<Omit<RankBucket, 'count' | 'volume' | 'traffic' | 'share'>> = [
+    { key: '1-3', label: 'Top 3', min: 1, max: 3 },
+    { key: '4-10', label: '4–10', min: 4, max: 10 },
+    { key: '11-20', label: '11–20', min: 11, max: 20 },
+    { key: '21-50', label: '21–50', min: 21, max: 50 },
+    { key: '51-100', label: '51–100', min: 51, max: 100 },
+  ]
+  const positionDistribution: RankBucket[] = bucketsDef.map((b) => {
+    const inBucket = ranked.filter((r) => {
+      const p = Number(r.position)
+      return p >= b.min && p <= b.max
+    })
+    const volume = inBucket.reduce((s, r) => s + (Number(r.volume) || 0), 0)
+    const traffic = inBucket.reduce((s, r) => s + (Number(r.traffic) || 0), 0)
+    return {
+      ...b,
+      count: inBucket.length,
+      volume,
+      traffic,
+      share: ranked.length ? inBucket.length / ranked.length : 0,
+    }
+  })
+
+  const opportunities: KeywordOpportunity[] = []
+  for (const row of ranked) {
+    const pos = Number(row.position)
+    const prev = row.previousPosition != null ? Number(row.previousPosition) : null
+    const vol = row.volume != null ? Number(row.volume) : 0
+    const traffic = row.traffic != null ? Number(row.traffic) : 0
+    const cpc = row.cpc != null ? Number(row.cpc) : 0
+    const diff = row.difficulty != null ? Number(row.difficulty) : null
+
+    // Striking distance: page 2 ranks with meaningful demand (classic ops list)
+    if (pos >= 11 && pos <= 20 && (vol >= 20 || traffic > 0)) {
+      const score = Math.round(vol * (1 / pos) * 10 + traffic * 2 + cpc * 5)
+      opportunities.push({
+        keyword: row.keyword,
+        position: pos,
+        previousPosition: prev,
+        volume: row.volume,
+        traffic: row.traffic,
+        difficulty: row.difficulty,
+        cpc: row.cpc,
+        url: row.url,
+        source: row.source,
+        score,
+        kind: 'striking_distance',
+        reason: `Pos #${pos} with demand — one content/internal-link push can enter top 10.`,
+      })
+      continue
+    }
+
+    // Quick wins: already top 10 with low difficulty / solid volume
+    if (pos >= 4 && pos <= 10 && vol >= 50 && (diff == null || diff <= 40)) {
+      const score = Math.round(vol * (1 / pos) * 12 + cpc * 8)
+      opportunities.push({
+        keyword: row.keyword,
+        position: pos,
+        previousPosition: prev,
+        volume: row.volume,
+        traffic: row.traffic,
+        difficulty: row.difficulty,
+        cpc: row.cpc,
+        url: row.url,
+        source: row.source,
+        score,
+        kind: 'quick_win',
+        reason: `Pos #${pos}${diff != null ? ` · KD ${diff}` : ''} — optimize title/FAQ for a top-3 push.`,
+      })
+      continue
+    }
+
+    // Value upside: high CPC × volume still outside top 10
+    if (pos > 10 && pos <= 50 && cpc >= 1 && vol >= 30) {
+      const score = Math.round(vol * cpc * (1 / Math.max(pos, 1)) * 20)
+      opportunities.push({
+        keyword: row.keyword,
+        position: pos,
+        previousPosition: prev,
+        volume: row.volume,
+        traffic: row.traffic,
+        difficulty: row.difficulty,
+        cpc: row.cpc,
+        url: row.url,
+        source: row.source,
+        score,
+        kind: 'value_upside',
+        reason: `High commercial intent (CPC $${cpc.toFixed(2)}) at #${pos}.`,
+      })
+      continue
+    }
+
+    // Decay: lost ground vs previous measured rank
+    if (prev != null && pos > prev && prev > 0 && pos - prev >= 3 && (vol >= 30 || traffic > 0)) {
+      const score = Math.round((pos - prev) * Math.max(vol, traffic * 10, 1))
+      opportunities.push({
+        keyword: row.keyword,
+        position: pos,
+        previousPosition: prev,
+        volume: row.volume,
+        traffic: row.traffic,
+        difficulty: row.difficulty,
+        cpc: row.cpc,
+        url: row.url,
+        source: row.source,
+        score,
+        kind: 'decay',
+        reason: `Dropped ${prev} → ${pos}. Investigate SERP change / page health.`,
+      })
+    }
+  }
+  opportunities.sort((a, b) => b.score - a.score)
+
+  // Cannibalization heuristic: same keyword appearing with multiple destination URLs across sources/rows.
+  const byKw = new Map<string, KeywordRow[]>()
+  for (const row of list) {
+    const key = String(row.keyword || '').toLowerCase().trim()
+    if (!key) continue
+    const arr = byKw.get(key) || []
+    arr.push(row)
+    byKw.set(key, arr)
+  }
+  const cannibalization: CannibalCluster[] = []
+  for (const [keyword, group] of byKw) {
+    const urls = [...new Set(group.map((g) => String(g.url || '').split('?')[0].replace(/\/$/, '')).filter(Boolean))]
+    if (urls.length < 2) continue
+    const best = group
+      .map((g) => (g.position != null && Number(g.position) > 0 ? Number(g.position) : null))
+      .filter((p): p is number => p != null)
+      .sort((a, b) => a - b)[0] ?? null
+    const volume = group.reduce((s, g) => Math.max(s, Number(g.volume) || 0), 0) || null
+    cannibalization.push({
+      keyword: group[0].keyword,
+      urls: urls.slice(0, 6),
+      bestPosition: best,
+      volume,
+      sources: [...new Set(group.map((g) => g.source).filter(Boolean))],
+    })
+  }
+  cannibalization.sort((a, b) => (b.volume || 0) - (a.volume || 0) || (a.bestPosition || 999) - (b.bestPosition || 999))
+
+  // Landing page clusters — "Pages by keywords" view (Ahrefs Top pages analog)
+  const byUrl = new Map<string, KeywordRow[]>()
+  for (const row of ranked) {
+    const url = String(row.url || '').trim()
+    if (!url) continue
+    const key = url.split('?')[0].replace(/\/$/, '')
+    const arr = byUrl.get(key) || []
+    arr.push(row)
+    byUrl.set(key, arr)
+  }
+  const pageClusters: PageCluster[] = [...byUrl.entries()]
+    .map(([url, group]) => {
+      const positions = group.map((g) => Number(g.position)).filter((p) => p > 0)
+      return {
+        url,
+        keywords: group.length,
+        top3: positions.filter((p) => p <= 3).length,
+        top10: positions.filter((p) => p <= 10).length,
+        volume: group.reduce((s, g) => s + (Number(g.volume) || 0), 0),
+        traffic: group.reduce((s, g) => s + (Number(g.traffic) || 0), 0),
+        bestPosition: positions.length ? Math.min(...positions) : null,
+        sampleKeywords: group
+          .slice()
+          .sort((a, b) => (Number(a.position) || 999) - (Number(b.position) || 999))
+          .slice(0, 4)
+          .map((g) => g.keyword),
+      }
+    })
+    .sort((a, b) => b.keywords - a.keywords || b.traffic - a.traffic || b.volume - a.volume)
+    .slice(0, 40)
+
+  return {
+    positionDistribution,
+    opportunities: opportunities.slice(0, 40),
+    cannibalization: cannibalization.slice(0, 25),
+    pageClusters,
+    kpis: {
+      tracked: list.length,
+      ranked: ranked.length,
+      top3: ranked.filter((r) => Number(r.position) <= 3).length,
+      top10: ranked.filter((r) => Number(r.position) <= 10).length,
+      top20: ranked.filter((r) => Number(r.position) <= 20).length,
+      strikingDistance: opportunities.filter((o) => o.kind === 'striking_distance').length,
+      cannibalized: cannibalization.length,
+      totalVolume: list.reduce((s, r) => s + (Number(r.volume) || 0), 0),
+      totalTraffic: list.reduce((s, r) => s + (Number(r.traffic) || 0), 0),
+    },
+  }
 }

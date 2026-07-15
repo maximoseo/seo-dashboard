@@ -247,11 +247,16 @@ export default function CompetitorsPage() {
       {gaps.length > 0 && (
         <DataCard title="Competitor gap estimates" dataState={dataState as any} fetchedAt={data?.fetchedAt}>
           <div className="space-y-2">
-            {gaps.slice(0, 8).map((g: any) => (
+            {gaps.slice(0, 10).map((g: any) => (
               <div key={g.competitor} className="flex items-center justify-between gap-3 rounded-xl border border-border bg-bg-darkest px-3 py-2.5">
                 <div className="min-w-0">
                   <p className="truncate text-sm font-medium text-fg">{g.competitor}</p>
                   <p className="text-[11px] text-fg-dim mt-0.5 line-clamp-2">{g.note}</p>
+                  <div className="mt-1 flex flex-wrap gap-2 text-[11px] text-fg-muted">
+                    {g.commonKeywords != null && <span>Common KW {Number(g.commonKeywords).toLocaleString()}</span>}
+                    {g.competitorTraffic != null && <span>Traffic {Number(g.competitorTraffic).toLocaleString()}</span>}
+                    {g.relevance != null && <span>Relevance {Math.round(Number(g.relevance))}</span>}
+                  </div>
                 </div>
                 <div className="text-right shrink-0">
                   <p className="text-[10px] uppercase tracking-wider text-fg-dim">Missing est.</p>

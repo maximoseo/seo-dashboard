@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   competitorsFromSemrush,
+  computeKeywordIntel,
   keywordsFromSemrush,
   mergeCompetitors,
   mergeKeywordRows,
@@ -42,5 +43,19 @@ describe('provider adapters', () => {
     ])
     expect(m.improved).toHaveLength(1)
     expect(m.declined).toHaveLength(1)
+  })
+
+  it('builds Ahrefs-style keyword intel from real rows', () => {
+    const intel = computeKeywordIntel([
+      { keyword: 'near top', position: 12, previousPosition: 15, volume: 400, difficulty: 25, traffic: 12, url: 'https://a.example/a', cpc: 1.2, trend: 'up', source: 'semrush' },
+      { keyword: 'near top', position: 14, previousPosition: null, volume: 400, difficulty: 25, traffic: 5, url: 'https://a.example/b', cpc: 1.2, trend: null, source: 'ahrefs' },
+      { keyword: 'win', position: 5, previousPosition: 8, volume: 900, difficulty: 20, traffic: 80, url: 'https://a.example/a', cpc: 0.4, trend: 'up', source: 'semrush' },
+      { keyword: 'deep', position: 70, previousPosition: 40, volume: 200, difficulty: 50, traffic: 1, url: 'https://a.example/c', cpc: 2.5, trend: 'down', source: 'dataforseo' },
+    ])
+    expect(intel.positionDistribution.find((b) => b.key === '11-20')?.count).toBe(2)
+    expect(intel.opportunities.some((o) => o.kind === 'striking_distance')).toBe(true)
+    expect(intel.cannibalization.some((c) => c.keyword === 'near top' && c.urls.length >= 2)).toBe(true)
+    expect(intel.pageClusters[0].keywords).toBeGreaterThanOrEqual(1)
+    expect(intel.kpis.top10).toBe(1)
   })
 })
