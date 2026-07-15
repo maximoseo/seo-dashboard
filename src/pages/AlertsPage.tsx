@@ -8,6 +8,9 @@ import PageSizeSelect from '@/components/PageSizeSelect'
 import SyncButton from '@/components/SyncButton'
 import { usePageSize } from '@/hooks/usePageSize'
 import { refreshAlerts } from '@/api/client'
+import DomainIntegrityBar from '@/components/DomainIntegrityBar'
+import { canonicalizeDomain } from '@/lib/domain'
+import { useDomainSwitchCleanup } from '@/lib/useDomainQuery'
 
 type Severity = 'critical' | 'warning' | 'info'
 type AlertStatus = 'unread' | 'read' | 'resolved'
@@ -81,13 +84,16 @@ const severityConfig = {
 
 export default function AlertsPage() {
   const { domain } = useSEO()
+  useDomainSwitchCleanup(domain)
+  const clean = canonicalizeDomain(domain)
   const qc = useQueryClient()
   const { pageSize, setPageSize } = usePageSize('alerts')
   const [page, setPage] = useState(1)
   const [syncing, setSyncing] = useState(false)
   const { data, isLoading, error, isFetching, dataUpdatedAt } = useQuery({
-    queryKey: ['alerts', domain],
-    queryFn: () => fetchAlerts(domain),
+    queryKey: ['alerts', clean],
+    queryFn: () => fetchAlerts(clean),
+    enabled: !!clean,
     staleTime: 2 * 60 * 1000,
     retry: 1,
   })
@@ -122,11 +128,11 @@ export default function AlertsPage() {
   const paginated = filtered.slice((page - 1) * pageSize, page * pageSize)
 
   const handleForceSync = async () => {
-    if (!domain) return
+    if (!clean) return
     setSyncing(true)
     try {
-      const fresh = await refreshAlerts(domain)
-      qc.setQueryData(['alerts', domain], fresh)
+      const fresh = await refreshAlerts(clean)
+      qc.setQueryData(['alerts', clean], fresh)
     } catch {
       // keep cache
     } finally {
@@ -149,14 +155,22 @@ export default function AlertsPage() {
 
   return (
     <div className="space-y-4 lg:space-y-5">
+      <DomainIntegrityBar
+        activeDomain={clean}
+        payloadDomain={(data as any)?.domain || clean}
+        dataState={dataState as any}
+        fetchedAt={dataUpdatedAt ? new Date(dataUpdatedAt).toISOString() : null}
+        rowCount={alerts.length}
+        extra={clean ? `alerts for ${clean}` : 'no domain'}
+      />
       <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2">
         <div>
           <h2 className="text-base md:text-lg font-semibold text-fg">Alerts & Notifications</h2>
-          <p className="text-xs md:text-sm text-fg-muted mt-0.5">Aggregated alerts from all monitoring sources for {domain}</p>
+          <p className="text-xs md:text-sm text-fg-muted mt-0.5">Aggregated alerts from monitoring sources for {clean || domain}</p>
         </div>
         <div className="flex gap-2 items-center flex-wrap">
           <SyncButton onClick={handleForceSync} loading={syncing || isFetching} label="Force refresh" loadingLabel="Syncing…" />
-          <DataStateBadge state={dataState as any} source={data?.source || 'rules'} fetchedAt={dataUpdatedAt ? new Date(dataUpdatedAt).toISOString() : null} />
+          <DataStateBadge state={dataState as any} source={(data as any)?.source || 'rules'} fetchedAt={dataUpdatedAt ? new Date(dataUpdatedAt).toISOString() : null} />
           <PageSizeSelect value={pageSize} onChange={(n) => { setPageSize(n); setPage(1) }} compact />
         </div>
       </div>

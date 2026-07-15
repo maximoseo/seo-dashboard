@@ -7,6 +7,9 @@ import { usePageSize } from '@/hooks/usePageSize'
 import { useSEO } from '@/contexts/SEOContext'
 import { useProject } from '@/contexts/ProjectContext'
 import { useSiteAudit, refreshSiteAudit } from '@/api/client'
+import DomainIntegrityBar from '@/components/DomainIntegrityBar'
+import { canonicalizeDomain } from '@/lib/domain'
+import { useDomainSwitchCleanup } from '@/lib/useDomainQuery'
 
 type Severity = 'error' | 'warning' | 'notice' | 'all'
 
@@ -43,6 +46,7 @@ function severityStyles(severity: string) {
 export default function SiteAuditPage() {
   const { domain } = useSEO()
   const { activeProject } = useProject()
+  useDomainSwitchCleanup(domain)
   const market = activeProject?.market || null
   const qc = useQueryClient()
   const { data, isLoading, error, isFetching, dataUpdatedAt } = useSiteAudit(domain, market)
@@ -149,7 +153,7 @@ export default function SiteAuditPage() {
     setSyncing(true)
     try {
       const fresh = await refreshSiteAudit(domain, market)
-      qc.setQueryData(['site-audit', domain, market?.trim() || ''], fresh)
+      qc.setQueryData(['site-audit', canonicalizeDomain(domain), market?.trim() || ''], fresh)
     } catch {
       // keep cache
     } finally {
@@ -170,6 +174,14 @@ export default function SiteAuditPage() {
 
   return (
     <div className="space-y-4 lg:space-y-5">
+      <DomainIntegrityBar
+        activeDomain={domain}
+        payloadDomain={data?.canonicalDomain || data?.domain || domain}
+        dataState={error ? 'unavailable' : isLoading ? 'loading' : (issues.length || pages.length) ? (data?.dataState === 'cached' ? 'cached' : 'live') : 'unavailable'}
+        fetchedAt={data?.fetchedAt || (dataUpdatedAt ? new Date(dataUpdatedAt).toISOString() : null)}
+        fromSnapshot={Boolean(data?.fromSnapshot)}
+        rowCount={issues.length + pages.length}
+      />
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
         <div>
           <h2 className="text-base md:text-lg font-semibold text-fg">Site Audit</h2>

@@ -4,6 +4,9 @@ import DataStateBadge from '@/components/DataStateBadge'
 import { useSEO } from '@/contexts/SEOContext'
 import { useProject } from '@/contexts/ProjectContext'
 import { authFetch } from '@/lib/authToken'
+import DomainIntegrityBar from '@/components/DomainIntegrityBar'
+import { canonicalizeDomain } from '@/lib/domain'
+import { useDomainSwitchCleanup } from '@/lib/useDomainQuery'
 
 interface LocalCheck {
   name: string
@@ -49,13 +52,19 @@ function mapCheckState(status: string, outer: string) {
 export default function LocalSEOPage() {
   const { domain } = useSEO()
   const { activeProject } = useProject()
+  useDomainSwitchCleanup(domain)
+  const clean = canonicalizeDomain(domain)
   const projectMarket = activeProject?.market || null
   const { data, isLoading, error, refetch } = useQuery({
-    queryKey: ['local-seo', domain, projectMarket],
-    queryFn: () => fetchLocalSeo(domain, projectMarket),
+    queryKey: ['local-seo', clean, projectMarket],
+    queryFn: () => fetchLocalSeo(clean, projectMarket),
+    enabled: !!clean,
     staleTime: 10 * 60 * 1000,
   })
-  const checks = data?.checks?.length ? data.checks : fallbackChecks
+  // Prefer live payload checks; fallback is explicitly planned empty-state scaffold, not demo client metrics
+  const checks = data?.checks?.length
+    ? data.checks
+    : (error || isLoading ? [] : fallbackChecks)
   const state = error
     ? 'unavailable'
     : data?.dataState === 'partial'
@@ -69,6 +78,13 @@ export default function LocalSEOPage() {
 
   return (
     <div className="max-w-[1400px] space-y-4 lg:space-y-5">
+      <DomainIntegrityBar
+        activeDomain={clean}
+        payloadDomain={data?.domain || clean}
+        dataState={state as any}
+        fetchedAt={data?.fetchedAt}
+        rowCount={checks.length}
+      />
       <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h2 className="text-base font-semibold text-fg md:text-lg">Local SEO</h2>

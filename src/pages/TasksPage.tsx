@@ -5,6 +5,9 @@ import DataStateBadge from '@/components/DataStateBadge'
 import { useSEO } from '@/contexts/SEOContext'
 import { authFetch } from '@/lib/authToken'
 import { readApiError } from '@/lib/apiErrors'
+import DomainIntegrityBar from '@/components/DomainIntegrityBar'
+import { canonicalizeDomain } from '@/lib/domain'
+import { useDomainSwitchCleanup } from '@/lib/useDomainQuery'
 
 type TaskStatus = 'queued' | 'working' | 'blocked' | 'snoozed' | 'verified' | 'closed'
 type TaskPriority = 'low' | 'medium' | 'high' | 'critical'
@@ -38,12 +41,15 @@ async function patchTask(id: string, body: { action?: string; snoozeHours?: numb
 
 export default function TasksPage() {
   const { domain } = useSEO()
+  useDomainSwitchCleanup(domain)
+  const clean = canonicalizeDomain(domain)
   const qc = useQueryClient()
   const [status, setStatus] = useState<TaskStatus | 'all'>('all')
   const [actionError, setActionError] = useState<string | null>(null)
   const { data, isLoading, error } = useQuery({
-    queryKey: ['tasks', domain],
-    queryFn: () => fetchTasks(domain),
+    queryKey: ['tasks', clean],
+    queryFn: () => fetchTasks(clean),
+    enabled: !!clean,
     staleTime: 60 * 1000,
   })
 
@@ -51,12 +57,12 @@ export default function TasksPage() {
     mutationFn: ({ id, body }: { id: string; body: { action?: string; snoozeHours?: number } }) => patchTask(id, body),
     onSuccess: async () => {
       setActionError(null)
-      await qc.invalidateQueries({ queryKey: ['tasks', domain] })
+      await qc.invalidateQueries({ queryKey: ['tasks', clean] })
     },
     onError: (err) => setActionError(err instanceof Error ? err.message : 'Update failed'),
   })
 
-  const tasks = data?.tasks || []
+  const tasks = (data?.tasks || []).filter((t) => !t.domain || canonicalizeDomain(t.domain) === clean)
   const filtered = status === 'all' ? tasks : tasks.filter((t) => t.status === status)
   const dataState = error ? 'unavailable' : isLoading ? 'loading' : data?.source === 'empty' ? 'unavailable' : data ? 'live' : 'cached'
   const counts = useMemo(() => {
@@ -67,6 +73,14 @@ export default function TasksPage() {
 
   return (
     <div className="space-y-4 lg:space-y-5 max-w-[1400px]">
+      <DomainIntegrityBar
+        activeDomain={clean}
+        payloadDomain={clean}
+        dataState={error ? 'unavailable' : isLoading ? 'loading' : tasks.length ? 'live' : 'unavailable'}
+        fetchedAt={data?.fetchedAt}
+        rowCount={tasks.length}
+        extra={clean ? `queue for ${clean}` : 'no domain'}
+      />
       <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h2 className="text-base md:text-lg font-semibold text-fg">Tasks / Agents</h2>

@@ -3055,8 +3055,11 @@ app.get('/api/site-audit/aggregated', expensiveLimiter, async (req, res) => {
 
 // Aggregated vitals from multiple sources
 app.post('/api/vitals/aggregated', expensiveLimiter, async (req, res) => {
-  const { url } = req.body
-  const result: Record<string, any> = { url, sources: {}, activeSources: [] }
+  const { url } = req.body || {}
+  if (!url || !String(url).trim()) return res.status(400).json({ error: 'url required' })
+  let domainFromUrl = ''
+  try { domainFromUrl = canonicalizeDomain(new URL(String(url)).hostname) } catch { domainFromUrl = canonicalizeDomain(String(url)) }
+  const result: Record<string, any> = { url, domain: domainFromUrl, sources: {}, activeSources: [] as string[] }
 
   const calls = await Promise.allSettled([
     axios.get('https://www.googleapis.com/pagespeedonline/v5/runPagespeed', {
@@ -3081,7 +3084,7 @@ app.post('/api/vitals/aggregated', expensiveLimiter, async (req, res) => {
     result.activeSources.push('Browserless')
   }
 
-  res.json(result)
+  res.json(stampPayload(result, domainFromUrl || String(url)))
 })
 
 // Aggregated competitors from multiple sources
@@ -3205,8 +3208,9 @@ app.get('/api/competitors/aggregated', expensiveLimiter, async (req, res) => {
 
 // Content analysis — Exa competitive content + Thorbit
 app.post('/api/content/analyze', expensiveLimiter, async (req, res) => {
-  const { domain, keyword } = req.body
-  const result: Record<string, any> = { domain, keyword, sources: {}, activeSources: [] }
+  const { domain, keyword } = req.body || {}
+  if (!domain || !String(domain).trim()) return res.status(400).json({ error: 'domain required' })
+  const result: Record<string, any> = { domain: canonicalizeDomain(domain), keyword, sources: {}, activeSources: [] }
 
   const calls = await Promise.allSettled([
     EXA_API_KEY ? axios.post('https://api.exa.ai/search', {
@@ -3230,12 +3234,13 @@ app.post('/api/content/analyze', expensiveLimiter, async (req, res) => {
   }
   if (thorbit.status === 'fulfilled') { result.sources.thorbit = thorbit.value.data; result.activeSources.push('Thorbit') }
 
-  res.json(result)
+  res.json(stampPayload(result, domain))
 })
 
 // Alerts — aggregated from all sources
 app.get('/api/alerts/aggregated', expensiveLimiter, async (req, res) => {
   const { domain } = req.query as Record<string, string>
+  if (!domain?.trim()) return res.status(400).json({ error: 'domain required' })
   const alerts: any[] = []
 
   // Generate alerts from available data
@@ -3295,7 +3300,11 @@ app.get('/api/alerts/aggregated', expensiveLimiter, async (req, res) => {
     'Rules Engine',
   ].filter(Boolean)
 
-  res.json({ alerts: [...ruleAlerts, ...alerts], activeSources })
+  res.json(stampPayload({
+    alerts: [...ruleAlerts, ...alerts],
+    activeSources,
+    source: activeSources.join(', '),
+  }, domain))
 })
 
 const seedProjects: SeedProject[] = [
