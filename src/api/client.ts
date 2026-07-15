@@ -194,3 +194,29 @@ export async function refreshSiteAudit(
   if (market?.trim()) params.market = market.trim()
   return guardDomain(await fetchAPI('site-audit/aggregated', params), clean)
 }
+
+export function useSiteAuditHistory(domain: string | null, limit = 10) {
+  const clean = canonicalizeDomain(domain)
+  return useQuery({
+    queryKey: ['site-audit-history', clean, limit],
+    queryFn: async () => {
+      return fetchAPI('site-audit/history', {
+        domain: clean,
+        limit: String(limit),
+      })
+    },
+    enabled: !!clean,
+    staleTime: 5 * 60 * 1000,
+  })
+}
+
+export async function recheckSiteAuditUrl(domain: string, url: string) {
+  const clean = canonicalizeDomain(domain)
+  const res = await authFetch(`${API_BASE || ''}/api/site-audit/recheck-url`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ domain: clean, url }),
+  })
+  if (!res.ok) throw new Error(`recheck-url failed: ${res.status}`)
+  return res.json()
+}

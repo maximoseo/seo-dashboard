@@ -683,6 +683,40 @@ async function loadSnapshotPayload(domain: string, provider: string): Promise<{ 
   return { data: accepted.data, fetchedAt: data.fetched_at || null }
 }
 
+/** Recent snapshots for history / compare (Site Audit Phase 2). */
+async function loadSnapshotHistory(
+  domain: string,
+  provider: string,
+  limit = 10,
+): Promise<Array<{ fetchedAt: string | null; snapshotDate: string | null; summary: Record<string, any>; issuesCount: number }>> {
+  if (!supabaseAdmin) return []
+  const domainId = await findDomainId(domain)
+  if (!domainId) return []
+  const take = Math.min(Math.max(Number(limit) || 10, 1), 30)
+  const { data } = await supabaseAdmin
+    .from('seo_snapshots')
+    .select('data, fetched_at, snapshot_date')
+    .eq('domain_id', domainId)
+    .eq('provider', provider)
+    .order('fetched_at', { ascending: false })
+    .limit(take)
+  if (!Array.isArray(data)) return []
+  const rows: Array<{ fetchedAt: string | null; snapshotDate: string | null; summary: Record<string, any>; issuesCount: number }> = []
+  for (const row of data) {
+    const accepted = acceptSnapshotForDomain({ data: row.data, fetchedAt: row.fetched_at || null }, domain)
+    if (!accepted?.data) continue
+    const payload = accepted.data as any
+    const issues = Array.isArray(payload.issues) ? payload.issues : []
+    rows.push({
+      fetchedAt: row.fetched_at || null,
+      snapshotDate: row.snapshot_date || null,
+      summary: payload.summary || {},
+      issuesCount: issues.length,
+    })
+  }
+  return rows
+}
+
 async function persistSnapshot(
   domain: string,
   provider: string,
@@ -3068,6 +3102,82 @@ app.get('/api/site-audit/aggregated', expensiveLimiter, async (req, res) => {
     void persistSnapshot(domain, 'site_audit_agg', stampedAudit)
   }
   res.json(stampedAudit)
+})
+
+// Site Audit history (recent seo_snapshots for provider site_audit_agg)
+app.get('/api/site-audit/history', expensiveLimiter, async (req, res) => {
+  const { domain, limit } = req.query as Record<string, string>
+  if (!domain?.trim()) return res.status(400).json({ error: 'domain required' })
+  const pack = marketFromRequest(req, domain)
+  const history = await loadSnapshotHistory(domain, 'site_audit_agg', Number(limit) || 10)
+  const current = history[0] || null
+  const previous = history[1] || null
+  let delta: Record<string, number | null> | null = null
+  if (current && previous) {
+    const c = current.summary || {}
+    const p = previous.summary || {}
+    const num = (v: any) => (v == null || v === '' || Number.isNaN(Number(v)) ? null : Number(v))
+    const d = (a: any, b: any) => {
+      const av = num(a)
+      const bv = num(b)
+      if (av == null || bv == null) return null
+      return av - bv
+    }
+    delta = {
+      errors: d(c.errors, p.errors),
+      warnings: d(c.warnings, p.warnings),
+      notices: d(c.notices, p.notices),
+      pagesCrawled: d(c.pagesCrawled, p.pagesCrawled),
+      issuesTotal: d(c.issuesTotal ?? current.issuesCount, p.issuesTotal ?? previous.issuesCount),
+      onpageScore: d(c.onpageScore, p.onpageScore),
+    }
+  }
+  res.json({
+    domain,
+    market: pack,
+    history,
+    delta,
+    dataState: history.length ? 'live' : 'unavailable',
+    fetchedAt: new Date().toISOString(),
+  })
+})
+
+// Site Audit single-URL recheck via DataForSEO instant_pages (cheap path)
+app.post('/api/site-audit/recheck-url', expensiveLimiter, async (req, res) => {
+  const body = req.body || {}
+  const url = String(body.url || '').trim()
+  const domain = String(body.domain || '').trim()
+  if (!url) return res.status(400).json({ error: 'url required' })
+  if (!DATAFORSEO_AUTH) {
+    return res.status(503).json({ error: 'DataForSEO not configured', softDegraded: true })
+  }
+  try {
+    const target = url.startsWith('http') ? url : `https://${url}`
+    const instant = await axios.post(
+      'https://api.dataforseo.com/v3/on_page/instant_pages',
+      [{ url: target, enable_javascript: false, load_resources: false }],
+      {
+        headers: { Authorization: `Basic ${DATAFORSEO_AUTH}`, 'Content-Type': 'application/json' },
+        timeout: 45000,
+      },
+    )
+    const task = instant.data?.tasks?.[0]
+    const item = task?.result?.[0]?.items?.[0] || task?.result?.[0] || null
+    res.json({
+      ok: true,
+      domain: domain || null,
+      url: target,
+      item,
+      softDegraded: !item,
+      fetchedAt: new Date().toISOString(),
+    })
+  } catch (err: any) {
+    res.status(502).json({
+      ok: false,
+      error: err?.message || 'recheck failed',
+      softDegraded: true,
+    })
+  }
 })
 
 // Aggregated vitals from multiple sources

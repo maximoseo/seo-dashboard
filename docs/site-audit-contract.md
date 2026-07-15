@@ -79,4 +79,13 @@
 - Pages: cards on mobile, table desktop  
 - Client CSV export for issues + pages  
 
-**Not in Phase 1:** async task queue, history/compare, create-tasks, schedule.
+## Phase 2 API / FE (2026-07-15)
+
+| Endpoint | Purpose |
+|----------|---------|
+| `GET /api/site-audit/history?domain=&limit=` | Recent `seo_snapshots` rows for `site_audit_agg` + Δ vs previous |
+| `POST /api/site-audit/recheck-url` | Body `{ domain, url }` via DataForSEO `instant_pages` |
+
+FE: History tab, delta strip, Recheck URL on page cards/table.
+
+**Still later:** async crawl queue, create-tasks, schedule.

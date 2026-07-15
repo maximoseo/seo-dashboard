@@ -6,7 +6,12 @@ import SyncButton from '@/components/SyncButton'
 import { usePageSize } from '@/hooks/usePageSize'
 import { useSEO } from '@/contexts/SEOContext'
 import { useProject } from '@/contexts/ProjectContext'
-import { useSiteAudit, refreshSiteAudit } from '@/api/client'
+import {
+  useSiteAudit,
+  refreshSiteAudit,
+  useSiteAuditHistory,
+  recheckSiteAuditUrl,
+} from '@/api/client'
 import DomainIntegrityBar from '@/components/DomainIntegrityBar'
 import { canonicalizeDomain } from '@/lib/domain'
 import { useDomainSwitchCleanup } from '@/lib/useDomainQuery'
@@ -80,14 +85,17 @@ export default function SiteAuditPage() {
     market,
     maxPages,
   )
+  const { data: historyData, isLoading: historyLoading } = useSiteAuditHistory(domain, 10)
   const { pageSize, setPageSize } = usePageSize('site-audit')
   const [severity, setSeverity] = useState<Severity>('all')
   const [search, setSearch] = useState('')
   const [page, setPage] = useState(1)
   const [syncing, setSyncing] = useState(false)
-  const [tab, setTab] = useState<'issues' | 'pages'>('issues')
+  const [tab, setTab] = useState<'issues' | 'pages' | 'history'>('issues')
   const [openIssueId, setOpenIssueId] = useState<string | null>(null)
   const [statusMsg, setStatusMsg] = useState<string | null>(null)
+  const [recheckBusy, setRecheckBusy] = useState<string | null>(null)
+  const [recheckMsg, setRecheckMsg] = useState<string | null>(null)
 
   const issues: AuditIssue[] = useMemo(() => {
     if (!Array.isArray(data?.issues)) return []
@@ -183,11 +191,39 @@ export default function SiteAuditPage() {
     [issues],
   )
 
-  const activeLen = tab === 'issues' ? filteredIssues.length : filteredPages.length
+  const historyRows: Array<{
+    fetchedAt: string | null
+    snapshotDate: string | null
+    summary: Record<string, any>
+    issuesCount: number
+  }> = Array.isArray(historyData?.history) ? historyData.history : []
+  const delta = historyData?.delta || null
+
+  const activeLen =
+    tab === 'issues' ? filteredIssues.length : tab === 'pages' ? filteredPages.length : historyRows.length
   const totalPages = Math.max(1, Math.ceil(activeLen / pageSize))
   const pageSafe = Math.min(page, totalPages)
   const paginatedIssues = filteredIssues.slice((pageSafe - 1) * pageSize, pageSafe * pageSize)
   const paginatedPages = filteredPages.slice((pageSafe - 1) * pageSize, pageSafe * pageSize)
+  const paginatedHistory = historyRows.slice((pageSafe - 1) * pageSize, pageSafe * pageSize)
+
+  const handleRecheckUrl = async (url: string) => {
+    if (!domain || !url) return
+    setRecheckBusy(url)
+    setRecheckMsg(null)
+    try {
+      const res = await recheckSiteAuditUrl(domain, url)
+      setRecheckMsg(
+        res?.ok
+          ? `Rechecked ${url}${res.softDegraded ? ' (partial)' : ''}`
+          : `Recheck failed for ${url}`,
+      )
+    } catch (e) {
+      setRecheckMsg(e instanceof Error ? e.message : 'Recheck failed')
+    } finally {
+      setRecheckBusy(null)
+    }
+  }
 
   const activeSources: string[] = data?.activeSources || []
   const softDegraded: string[] = Array.isArray(data?.softDegraded) ? data.softDegraded : []
@@ -451,6 +487,7 @@ export default function SiteAuditPage() {
             [
               { id: 'issues', label: `Issues (${issues.length})` },
               { id: 'pages', label: `Crawled pages (${pages.length})` },
+              { id: 'history', label: `History (${historyRows.length})` },
             ] as const
           ).map((t) => (
             <button
@@ -472,6 +509,7 @@ export default function SiteAuditPage() {
         </div>
 
         <div className="flex flex-col sm:flex-row gap-2.5 sm:gap-3">
+          {tab !== 'history' && (
           <input
             type="text"
             placeholder={tab === 'issues' ? 'Search issues…' : 'Search page URL / title…'}
@@ -482,6 +520,7 @@ export default function SiteAuditPage() {
             }}
             className="w-full flex-1 min-h-11 px-3 py-2.5 rounded-lg bg-bg-darkest border border-border text-base sm:text-sm text-fg placeholder:text-fg-dim focus:outline-none focus:border-accent"
           />
+          )}
           {tab === 'issues' && (
             <select
               value={severity}
@@ -597,6 +636,74 @@ export default function SiteAuditPage() {
           </div>
         )}
 
+        {recheckMsg && (
+          <p className="text-xs text-accent-light" aria-live="polite">
+            {recheckMsg}
+          </p>
+        )}
+
+        {tab === 'history' && (
+          <div className="space-y-3">
+            {historyLoading && (
+              <div className="animate-pulse space-y-3">
+                {[1, 2, 3].map((i) => (
+                  <div key={i} className="h-14 bg-white/[0.06] rounded-xl" />
+                ))}
+              </div>
+            )}
+            {!historyLoading && historyRows.length === 0 && (
+              <div className="text-center py-8">
+                <p className="text-sm text-fg-muted">No prior crawl snapshots yet</p>
+                <p className="text-xs text-fg-dim mt-1">
+                  Run multiple audits over time to unlock history + delta.
+                </p>
+              </div>
+            )}
+            {delta && (
+              <div className="rounded-xl border border-border bg-bg-darkest px-3.5 py-3 text-xs text-fg-muted">
+                <p className="font-semibold text-fg mb-1.5">Δ vs previous crawl</p>
+                <div className="flex flex-wrap gap-2">
+                  {Object.entries(delta as Record<string, number | null>).map(([k, v]) => {
+                    const n = typeof v === 'number' ? v : null
+                    return (
+                      <span key={k} className="rounded border border-border px-1.5 py-0.5">
+                        {k}: {n == null ? '—' : n > 0 ? `+${n}` : String(n)}
+                      </span>
+                    )
+                  })}
+                </div>
+              </div>
+            )}
+            {paginatedHistory.map((row, idx) => (
+              <div
+                key={`${row.fetchedAt || row.snapshotDate || idx}`}
+                className="rounded-xl border border-border bg-bg-darkest px-3.5 py-3"
+              >
+                <p className="text-sm text-fg font-medium">
+                  {row.fetchedAt ? new Date(row.fetchedAt).toLocaleString() : row.snapshotDate || '—'}
+                </p>
+                <div className="mt-1.5 flex flex-wrap gap-2 text-[11px] text-fg-dim">
+                  <span className="rounded border border-border px-1.5 py-0.5">
+                    Errors {row.summary?.errors ?? '—'}
+                  </span>
+                  <span className="rounded border border-border px-1.5 py-0.5">
+                    Warnings {row.summary?.warnings ?? '—'}
+                  </span>
+                  <span className="rounded border border-border px-1.5 py-0.5">
+                    Pages {row.summary?.pagesCrawled ?? '—'}
+                  </span>
+                  <span className="rounded border border-border px-1.5 py-0.5">
+                    Issues {row.issuesCount}
+                  </span>
+                  <span className="rounded border border-border px-1.5 py-0.5">
+                    On-page {row.summary?.onpageScore ?? '—'}
+                  </span>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+
         {tab === 'pages' && paginatedPages.length > 0 && (
           <>
             {/* Mobile cards */}
@@ -624,6 +731,16 @@ export default function SiteAuditPage() {
                     <p className="mt-1 text-[11px] text-amber-200/90">
                       {(p.issues || []).slice(0, 4).join(' · ')}
                     </p>
+                  )}
+                  {p.url && (
+                    <button
+                      type="button"
+                      disabled={recheckBusy === p.url}
+                      onClick={() => void handleRecheckUrl(p.url)}
+                      className="mt-2 min-h-11 rounded-lg border border-accent/30 px-2.5 py-1.5 text-[11px] text-accent-light disabled:opacity-50"
+                    >
+                      {recheckBusy === p.url ? 'Rechecking…' : 'Recheck URL'}
+                    </button>
                   )}
                 </div>
               ))}
@@ -667,7 +784,19 @@ export default function SiteAuditPage() {
                       </td>
                       <td className="py-2.5 px-3 text-right text-fg-muted">{p.onpageScore ?? '—'}</td>
                       <td className="py-2.5 px-3 text-fg-dim text-xs">
-                        {(p.issues || []).slice(0, 3).join(', ') || '—'}
+                        <div className="flex items-center gap-2">
+                          <span>{(p.issues || []).slice(0, 3).join(', ') || '—'}</span>
+                          {p.url && (
+                            <button
+                              type="button"
+                              disabled={recheckBusy === p.url}
+                              onClick={() => void handleRecheckUrl(p.url)}
+                              className="shrink-0 rounded border border-accent/30 px-1.5 py-0.5 text-[10px] text-accent-light disabled:opacity-50"
+                            >
+                              {recheckBusy === p.url ? '…' : 'Recheck'}
+                            </button>
+                          )}
+                        </div>
                       </td>
                     </tr>
                   ))}
