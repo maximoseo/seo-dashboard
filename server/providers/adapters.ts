@@ -462,9 +462,9 @@ export function computeCompetitorGaps(ourKeywords: KeywordRow[], competitors: Co
   commonKeywords: number | null
   competitorTraffic: number | null
   relevance: number | null
+  realMissingCount?: number | null
 }> {
   const ourSet = new Set(ourKeywords.map((k) => k.keyword.toLowerCase()))
-  // Prefer competitors with real overlap signals; exclude undifferentiable giant placeholders already filtered upstream.
   return competitors
     .slice()
     .sort((a, b) => (b.commonKeywords ?? 0) - (a.commonKeywords ?? 0) || (b.traffic ?? 0) - (a.traffic ?? 0))
@@ -476,9 +476,274 @@ export function computeCompetitorGaps(ourKeywords: KeywordRow[], competitors: Co
       relevance: c.relevance ?? c.competitionLevel,
       ourMissingEstimate: c.commonKeywords != null ? Math.max(0, Math.round(c.commonKeywords * 0.35)) : null,
       note: ourSet.size
-        ? `Shared-keyword retailer estimate vs our ${ourSet.size} tracked keywords — full gap table needs SERP overlap API pull.`
+        ? `Shared-keyword retailer estimate vs our ${ourSet.size} tracked keywords — matrix rows (if present) come from live competitor ranked keywords.`
         : 'Pin competitors + refresh keywords to estimate gaps.',
     }))
+}
+
+export type KeywordGapRow = {
+  keyword: string
+  volume: number | null
+  difficulty: number | null
+  cpc: number | null
+  competitor: string
+  competitorPosition: number | null
+  competitorTraffic: number | null
+  ourPosition: number | null
+  opportunityScore: number
+  kind: 'missing' | 'outranked' | 'shared'
+  competitorUrl: string | null
+  ourUrl: string | null
+}
+
+/**
+ * Real keyword gap / intersection table from competitor ranked keywords vs ours.
+ * missing = they rank, we don't; outranked = both rank but they are better; shared = both with us better/equal.
+ */
+export function buildKeywordGapMatrix(
+  ourKeywords: KeywordRow[],
+  competitorKeywordSets: Array<{ competitor: string; keywords: KeywordRow[] }>,
+): {
+  rows: KeywordGapRow[]
+  summary: {
+    competitorsCompared: number
+    missing: number
+    outranked: number
+    shared: number
+    totalCompetitorKeywords: number
+  }
+} {
+  const ourMap = new Map<string, KeywordRow>()
+  for (const row of ourKeywords || []) {
+    const key = String(row.keyword || '').toLowerCase().trim()
+    if (!key) continue
+    const prev = ourMap.get(key)
+    if (!prev) ourMap.set(key, row)
+    else {
+      // Keep best (lowest) rank / highest volume
+      const betterPos =
+        prev.position != null && row.position != null
+          ? Number(row.position) < Number(prev.position)
+          : row.position != null && prev.position == null
+      ourMap.set(key, betterPos ? row : prev)
+    }
+  }
+
+  const rows: KeywordGapRow[] = []
+  let missing = 0
+  let outranked = 0
+  let shared = 0
+  let totalCompetitorKeywords = 0
+
+  for (const set of competitorKeywordSets || []) {
+    const competitor = canonicalizeLike(set.competitor)
+    if (!competitor) continue
+    for (const ck of set.keywords || []) {
+      const key = String(ck.keyword || '').toLowerCase().trim()
+      if (!key) continue
+      totalCompetitorKeywords += 1
+      const ours = ourMap.get(key)
+      const ourPos = ours?.position != null && Number(ours.position) > 0 ? Number(ours.position) : null
+      const theirPos = ck.position != null && Number(ck.position) > 0 ? Number(ck.position) : null
+      const volume = ck.volume ?? ours?.volume ?? null
+      const difficulty = ck.difficulty ?? ours?.difficulty ?? null
+      const cpc = ck.cpc ?? ours?.cpc ?? null
+      const theirTraffic = ck.traffic ?? null
+
+      let kind: KeywordGapRow['kind'] = 'missing'
+      if (ourPos == null) {
+        kind = 'missing'
+        missing += 1
+      } else if (theirPos != null && ourPos > theirPos) {
+        kind = 'outranked'
+        outranked += 1
+      } else {
+        kind = 'shared'
+        shared += 1
+      }
+
+      // Score prioritizes missing high-volume terms and outranked commercial terms
+      const vol = Number(volume) || 0
+      const cpcN = Number(cpc) || 0
+      const posFactor = theirPos != null ? 1 / Math.max(theirPos, 1) : 0.05
+      const kindBoost = kind === 'missing' ? 3 : kind === 'outranked' ? 2 : 0.4
+      const opportunityScore = Math.round((vol * Math.max(cpcN, 0.15) * posFactor + (Number(theirTraffic) || 0)) * kindBoost)
+
+      rows.push({
+        keyword: ck.keyword || ours?.keyword || key,
+        volume,
+        difficulty,
+        cpc,
+        competitor,
+        competitorPosition: theirPos,
+        competitorTraffic: theirTraffic,
+        ourPosition: ourPos,
+        opportunityScore,
+        kind,
+        competitorUrl: ck.url || null,
+        ourUrl: ours?.url || null,
+      })
+    }
+  }
+
+  rows.sort((a, b) => b.opportunityScore - a.opportunityScore || (b.volume || 0) - (a.volume || 0))
+
+  return {
+    rows: rows.slice(0, 200),
+    summary: {
+      competitorsCompared: (competitorKeywordSets || []).filter((s) => (s.keywords || []).length).length,
+      missing,
+      outranked,
+      shared,
+      totalCompetitorKeywords,
+    },
+  }
+}
+
+function canonicalizeLike(input?: string | null): string {
+  if (!input) return ''
+  return String(input)
+    .trim()
+    .toLowerCase()
+    .replace(/^https?:\/\//, '')
+    .replace(/^www\./, '')
+    .replace(/\/.*$/, '')
+}
+
+export type LinkOpportunity = {
+  domain: string
+  rank: number
+  backlinks: number
+  dofollow: number | null
+  quality: string
+  kind: 'strengthen' | 'reclaim_nofollow' | 'cleanup_spam' | 'locale_authority'
+  reason: string
+  score: number
+  firstSeen?: string
+  source?: string
+}
+
+/** Operator link list from our own backlink inventory (no invented competitor intersections). */
+export function computeLinkIntel(input: {
+  normalizedLinks?: any[]
+  refdomains?: any[]
+  domain?: string
+}): {
+  opportunities: LinkOpportunity[]
+  topRelevant: Array<{ domain: string; rank: number; backlinks: number; quality: string; source?: string }>
+  summary: { relevant: number; risky: number; spam: number; strengthen: number; cleanup: number }
+} {
+  const refs = Array.isArray(input.refdomains) ? input.refdomains : []
+  const links = Array.isArray(input.normalizedLinks) ? input.normalizedLinks : []
+  const opportunities: LinkOpportunity[] = []
+  let relevant = 0
+  let risky = 0
+  let spam = 0
+
+  for (const r of refs) {
+    const domain = String(r.domain || '').toLowerCase()
+    if (!domain) continue
+    const quality = String(r.quality || 'relevant')
+    const rank = Number(r.rank || 0) || 0
+    const backlinks = Number(r.backlinks || 0) || 0
+    const dofollow = r.dofollow == null ? null : Number(r.dofollow)
+    if (quality === 'spam') {
+      spam += 1
+      opportunities.push({
+        domain,
+        rank,
+        backlinks,
+        dofollow,
+        quality,
+        kind: 'cleanup_spam',
+        reason: 'Spam-pattern host in inventory — disavow / remove if still live.',
+        score: 40 + Math.min(rank, 30),
+        firstSeen: r.first_seen,
+        source: r.source,
+      })
+      continue
+    }
+    if (quality === 'risky') {
+      risky += 1
+      continue
+    }
+    relevant += 1
+    if (domain.endsWith('.co.il') || domain.endsWith('.org.il') || domain.endsWith('.gov.il') || domain.endsWith('.ac.il')) {
+      opportunities.push({
+        domain,
+        rank,
+        backlinks,
+        dofollow,
+        quality,
+        kind: 'locale_authority',
+        reason: 'Local IL authority domain already linking — expand with regional content / partner mentions.',
+        score: 70 + Math.min(rank, 50) + Math.min(backlinks, 10),
+        firstSeen: r.first_seen,
+        source: r.source,
+      })
+    } else if (rank >= 30 && backlinks <= 2) {
+      opportunities.push({
+        domain,
+        rank,
+        backlinks,
+        dofollow,
+        quality,
+        kind: 'strengthen',
+        reason: `High-rank domain (${rank}) with only ${backlinks} link(s) — pursue additional relevant URLs.`,
+        score: 50 + rank + (dofollow ? 10 : 0),
+        firstSeen: r.first_seen,
+        source: r.source,
+      })
+    }
+  }
+
+  // Nofollow reclaim from raw link rows
+  for (const link of links) {
+    if (link.dofollow === true) continue
+    if (String(link.quality || '') === 'spam') continue
+    const domain = String(link.domain_from || '').toLowerCase()
+    if (!domain) continue
+    const rank = Number(link.rank || 0) || 0
+    if (rank < 25) continue
+    if (opportunities.some((o) => o.domain === domain && o.kind === 'reclaim_nofollow')) continue
+    opportunities.push({
+      domain,
+      rank,
+      backlinks: 1,
+      dofollow: 0,
+      quality: String(link.quality || 'relevant'),
+      kind: 'reclaim_nofollow',
+      reason: 'Nofollow from meaningful rank domain — worth a link-type request if relationship exists.',
+      score: 35 + Math.min(rank, 40),
+      source: link.source,
+    })
+  }
+
+  opportunities.sort((a, b) => b.score - a.score)
+  const topRelevant = refs
+    .filter((r) => String(r.quality || 'relevant') === 'relevant')
+    .slice()
+    .sort((a, b) => (Number(b.rank) || 0) - (Number(a.rank) || 0))
+    .slice(0, 20)
+    .map((r) => ({
+      domain: String(r.domain || ''),
+      rank: Number(r.rank || 0) || 0,
+      backlinks: Number(r.backlinks || 0) || 0,
+      quality: String(r.quality || 'relevant'),
+      source: r.source,
+    }))
+
+  return {
+    opportunities: opportunities.slice(0, 40),
+    topRelevant,
+    summary: {
+      relevant,
+      risky,
+      spam,
+      strengthen: opportunities.filter((o) => o.kind === 'strengthen' || o.kind === 'locale_authority').length,
+      cleanup: opportunities.filter((o) => o.kind === 'cleanup_spam').length,
+    },
+  }
 }
 
 export type RankBucket = {

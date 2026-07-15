@@ -214,6 +214,9 @@ export default function BacklinksPage() {
     }
   }, [backlinks, summary.relevant, summary.risky, summary.spam])
 
+  const linkIntel = data?.linkIntel || null
+  const linkOpps = Array.isArray(linkIntel?.opportunities) ? linkIntel.opportunities : []
+
   const backlinksIntegrity = useMemo(() => filterBacklinkRowsForDomain(backlinks, domain || ''), [backlinks, domain])
   const domainSafeBacklinks = backlinksIntegrity.rows
 
@@ -384,6 +387,38 @@ export default function BacklinksPage() {
             {softDegraded.join(', ')} hit auth/quota/rate limits — remaining sources still shown.
           </p>
         </div>
+      )}
+
+      {linkOpps.length > 0 && (
+        <DataCard
+          title="Link opportunities"
+          dataState={dataState as any}
+          fetchedAt={data?.fetchedAt}
+          headerRight={
+            linkIntel?.summary ? (
+              <span className="text-[11px] text-fg-dim">
+                strengthen {linkIntel.summary.strengthen} · cleanup {linkIntel.summary.cleanup}
+              </span>
+            ) : null
+          }
+        >
+          <div className="space-y-2 max-h-80 overflow-auto">
+            {linkOpps.slice(0, 20).map((o: any) => (
+              <div key={`${o.kind}-${o.domain}`} className="rounded-xl border border-border bg-bg-darkest px-3 py-2.5">
+                <div className="flex items-start justify-between gap-2">
+                  <div className="min-w-0">
+                    <p className="text-sm font-medium text-fg truncate">{o.domain}</p>
+                    <p className="text-[11px] text-fg-dim mt-0.5 line-clamp-2">{o.reason}</p>
+                  </div>
+                  <div className="text-right shrink-0">
+                    <span className="text-[10px] uppercase tracking-wider text-fg-dim">{String(o.kind).replace(/_/g, ' ')}</span>
+                    <p className="text-xs tabular-nums text-fg">DR/rank {o.rank} · {o.backlinks} links</p>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </DataCard>
       )}
 
       <div className="grid grid-cols-2 lg:grid-cols-5 gap-3 md:gap-4">

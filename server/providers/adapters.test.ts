@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest'
 import {
   competitorsFromSemrush,
   computeKeywordIntel,
+  computeLinkIntel,
+  buildKeywordGapMatrix,
   keywordsFromSemrush,
   mergeCompetitors,
   mergeKeywordRows,
@@ -57,5 +59,37 @@ describe('provider adapters', () => {
     expect(intel.cannibalization.some((c) => c.keyword === 'near top' && c.urls.length >= 2)).toBe(true)
     expect(intel.pageClusters[0].keywords).toBeGreaterThanOrEqual(1)
     expect(intel.kpis.top10).toBe(1)
+  })
+
+  it('builds real keyword gap matrix without inventing rows', () => {
+    const matrix = buildKeywordGapMatrix(
+      [{ keyword: 'shared', position: 12, previousPosition: null, volume: 100, difficulty: null, traffic: null, url: 'https://us/', cpc: 1, trend: null, source: 'us' }],
+      [
+        {
+          competitor: 'comp.co.il',
+          keywords: [
+            { keyword: 'shared', position: 3, previousPosition: null, volume: 100, difficulty: null, traffic: 10, url: 'https://comp/', cpc: 1, trend: null, source: 'comp' },
+            { keyword: 'missing term', position: 5, previousPosition: null, volume: 500, difficulty: 20, traffic: 40, url: 'https://comp/m', cpc: 2, trend: null, source: 'comp' },
+          ],
+        },
+      ],
+    )
+    expect(matrix.summary.missing).toBe(1)
+    expect(matrix.summary.outranked).toBe(1)
+    expect(matrix.rows.some((r) => r.kind === 'missing' && r.keyword === 'missing term')).toBe(true)
+  })
+
+  it('builds link opportunities from quality inventory', () => {
+    const intel = computeLinkIntel({
+      domain: 'nyg.co.il',
+      refdomains: [
+        { domain: 'partner.co.il', rank: 45, backlinks: 1, quality: 'relevant', source: 'ahrefs' },
+        { domain: 'spam-shop.shop', rank: 5, backlinks: 3, quality: 'spam', source: 'dataforseo' },
+      ],
+      normalizedLinks: [{ domain_from: 'authority.com', rank: 60, dofollow: false, quality: 'relevant', source: 'ahrefs' }],
+    })
+    expect(intel.opportunities.some((o) => o.kind === 'locale_authority')).toBe(true)
+    expect(intel.opportunities.some((o) => o.kind === 'cleanup_spam')).toBe(true)
+    expect(intel.summary.spam).toBe(1)
   })
 })

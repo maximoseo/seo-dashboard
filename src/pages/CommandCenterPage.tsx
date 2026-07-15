@@ -23,6 +23,16 @@ type GapRow = {
   note?: string
 }
 
+type OpportunityRow = {
+  domain: string
+  keyword?: string
+  kind: string
+  position?: number | null
+  volume?: number | null
+  reason?: string
+  module: 'keywords' | 'backlinks' | 'competitors'
+}
+
 type CommandCenterResponse = {
   kpis: {
     projects: number
@@ -35,6 +45,7 @@ type CommandCenterResponse = {
     serviceRole: boolean
     movementSignals?: number
     gapSignals?: number
+    opportunitySignals?: number
   }
   worst: Array<{
     domain: string
@@ -58,6 +69,7 @@ type CommandCenterResponse = {
     newEntries: MovementRow[]
   }
   gaps?: GapRow[]
+  opportunities?: OpportunityRow[]
   softDegraded?: Array<{ domain: string; providers: string[] }>
   source: string
   warning?: string | null
@@ -180,6 +192,7 @@ export default function CommandCenterPage() {
   const improved = data?.movements?.improved || []
   const newEntries = data?.movements?.newEntries || []
   const gaps = data?.gaps || []
+  const opportunities = data?.opportunities || []
   const softDegraded = data?.softDegraded || []
 
   return (
@@ -376,6 +389,47 @@ export default function CommandCenterPage() {
           </div>
         </DataCard>
       </div>
+
+      <DataCard
+        title="Portfolio opportunities"
+        dataState={state as any}
+        fetchedAt={data?.fetchedAt}
+        headerRight={
+          kpis?.opportunitySignals != null ? (
+            <span className="text-[11px] text-fg-dim">{kpis.opportunitySignals} signals</span>
+          ) : null
+        }
+      >
+        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-2">
+          {opportunities.map((row) => (
+            <Link
+              key={`${row.domain}-${row.module}-${row.kind}-${row.keyword}`}
+              to={buildProjectPath(row.domain, row.module === 'backlinks' ? 'backlinks' : row.module === 'competitors' ? 'competitors' : 'keywords')}
+              className="rounded-xl border border-border bg-bg-darkest px-3 py-2.5 hover:border-accent/40"
+            >
+              <div className="flex items-start justify-between gap-2">
+                <div className="min-w-0">
+                  <p className="truncate text-sm font-medium text-fg">{row.keyword || row.domain}</p>
+                  <p className="truncate text-xs text-fg-dim">
+                    {row.domain} · {row.module}
+                  </p>
+                </div>
+                <span className="text-[10px] uppercase tracking-wider text-fg-dim shrink-0">{String(row.kind).replace(/_/g, ' ')}</span>
+              </div>
+              {row.reason && <p className="mt-1 line-clamp-2 text-[11px] text-fg-muted">{row.reason}</p>}
+              <div className="mt-1 flex gap-2 text-[11px] text-fg-dim">
+                {row.position != null && <span>#{row.position}</span>}
+                {row.volume != null && <span>SV {row.volume}</span>}
+              </div>
+            </Link>
+          ))}
+          {!loading && opportunities.length === 0 && (
+            <p className="text-sm text-fg-muted md:col-span-2 xl:col-span-3">
+              No opportunity snapshots yet. Force-refresh Keywords / Backlinks on focus domains, then re-open Command Center.
+            </p>
+          )}
+        </div>
+      </DataCard>
 
       {softDegraded.length > 0 && (
         <DataCard title="Provider soft-degrade" dataState="cached">

@@ -153,6 +153,10 @@ export default function CompetitorsPage() {
   const competitors = competitorsIntegrity.rows
   const activeSources = data?.activeSources || []
   const gaps = Array.isArray(data?.gaps) ? data.gaps : []
+  const keywordGap = data?.keywordGap || null
+  const gapRows = Array.isArray(keywordGap?.rows) ? keywordGap.rows : []
+  const gapSummary = keywordGap?.summary || null
+  const [gapFilter, setGapFilter] = useState<'all' | 'missing' | 'outranked' | 'shared'>('missing')
   const softDegraded = Array.isArray(data?.softDegraded) ? data.softDegraded : []
   const marketLabel = data?.market?.label || data?.market || null
 
@@ -168,6 +172,16 @@ export default function CompetitorsPage() {
     list.sort((a, b) => b[sortKey] - a[sortKey])
     return list
   }, [competitors, search, sortKey])
+
+  const filteredGaps = useMemo(() => {
+    let list = [...gapRows]
+    if (gapFilter !== 'all') list = list.filter((r: any) => r.kind === gapFilter)
+    if (search) {
+      const q = search.toLowerCase()
+      list = list.filter((r: any) => String(r.keyword || '').toLowerCase().includes(q) || String(r.competitor || '').toLowerCase().includes(q))
+    }
+    return list
+  }, [gapRows, gapFilter, search])
 
   const totalPages = Math.max(1, Math.ceil(filtered.length / pageSize))
   const paginated = filtered.slice((page - 1) * pageSize, page * pageSize)
@@ -256,6 +270,7 @@ export default function CompetitorsPage() {
                     {g.commonKeywords != null && <span>Common KW {Number(g.commonKeywords).toLocaleString()}</span>}
                     {g.competitorTraffic != null && <span>Traffic {Number(g.competitorTraffic).toLocaleString()}</span>}
                     {g.relevance != null && <span>Relevance {Math.round(Number(g.relevance))}</span>}
+                    {g.realMissingCount != null && <span className="text-accent-light">Real missing {g.realMissingCount}</span>}
                   </div>
                 </div>
                 <div className="text-right shrink-0">
@@ -264,6 +279,66 @@ export default function CompetitorsPage() {
                 </div>
               </div>
             ))}
+          </div>
+        </DataCard>
+      )}
+
+      {gapRows.length > 0 && (
+        <DataCard
+          title="Keyword gap matrix (live intersection)"
+          dataState={dataState as any}
+          fetchedAt={data?.fetchedAt}
+          headerRight={
+            gapSummary ? (
+              <span className="text-[11px] text-fg-dim">
+                {gapSummary.competitorsCompared} comps · missing {gapSummary.missing} · outranked {gapSummary.outranked} · shared {gapSummary.shared}
+              </span>
+            ) : null
+          }
+        >
+          <div className="mb-3 flex flex-wrap gap-1.5">
+            {([
+              ['missing', 'Missing (they rank, we don’t)'],
+              ['outranked', 'Outranked'],
+              ['shared', 'Shared'],
+              ['all', 'All'],
+            ] as const).map(([id, label]) => (
+              <button
+                key={id}
+                type="button"
+                onClick={() => setGapFilter(id)}
+                className={`px-2.5 py-1 rounded-lg text-[11px] border ${
+                  gapFilter === id
+                    ? 'border-accent/40 bg-accent/15 text-accent-light'
+                    : 'border-border text-fg-muted'
+                }`}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+          <div className="space-y-2 max-h-96 overflow-auto">
+            {filteredGaps.slice(0, 40).map((row: any) => (
+              <div key={`${row.competitor}-${row.keyword}-${row.kind}`} className="rounded-xl border border-border bg-bg-darkest px-3 py-2.5">
+                <div className="flex items-start justify-between gap-2">
+                  <div className="min-w-0">
+                    <p className="text-sm font-medium text-fg truncate">{row.keyword}</p>
+                    <p className="text-[11px] text-fg-dim mt-0.5 truncate">vs {row.competitor}</p>
+                  </div>
+                  <div className="text-right shrink-0">
+                    <span className="text-[10px] uppercase tracking-wider text-fg-dim">{row.kind}</span>
+                    <p className="text-xs tabular-nums text-fg">Them #{row.competitorPosition ?? '—'} · Us #{row.ourPosition ?? '—'}</p>
+                  </div>
+                </div>
+                <div className="mt-1.5 flex flex-wrap gap-2 text-[11px] text-fg-muted">
+                  {row.volume != null && <span>SV {Number(row.volume).toLocaleString()}</span>}
+                  {row.cpc != null && Number(row.cpc) > 0 && <span>CPC ${Number(row.cpc).toFixed(2)}</span>}
+                  {row.competitorTraffic != null && <span>Comp traffic {Number(row.competitorTraffic).toLocaleString()}</span>}
+                  <span className="text-fg-dim">score {row.opportunityScore}</span>
+                </div>
+              </div>
+            ))}
+            {!filteredGaps.length && <p className="text-xs text-fg-dim py-2">No matrix rows for this filter.</p>}
           </div>
         </DataCard>
       )}

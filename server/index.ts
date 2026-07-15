@@ -37,8 +37,10 @@ import { loadAgenticOsBridge, pushCriticalAlertToAsana, pushCriticalAlertToTodo 
 import { resolveMarket, serankingResearchUrl } from './markets/resolveMarket.js'
 import {
   backlinksFromSerpstat,
+  buildKeywordGapMatrix,
   computeCompetitorGaps,
   computeKeywordIntel,
+  computeLinkIntel,
   competitorsFromDataForSEO,
   competitorsFromExa,
   competitorsFromSemrush,
@@ -1763,11 +1765,17 @@ app.get('/api/backlinks/aggregated', expensiveLimiter, async (req, res) => {
           payload.summary = { ...(payload.summary || {}), ...scored.summaryPatch }
         }
       }
+      // Recompute operator link intel for older snapshots / new scoring
+      payload.linkIntel = computeLinkIntel({
+        normalizedLinks: payload.normalized || payload.normalizedAll || [],
+        refdomains: payload.refdomains || [],
+        domain,
+      })
       // Never return a snapshot belonging to another domain
       if (payload.domain && String(payload.domain).toLowerCase() !== String(domain).toLowerCase()) {
         // continue to live fetch
       } else {
-        return res.json(payload)
+        return res.json(stampPayload(payload, domain))
       }
     }
   }
@@ -2356,6 +2364,11 @@ app.get('/api/backlinks/aggregated', expensiveLimiter, async (req, res) => {
   }
 
   if (!result.normalized.length && !result.refdomains.length && !result.activeSources.length) result.dataState = 'unavailable'
+  result.linkIntel = computeLinkIntel({
+    normalizedLinks: result.normalized,
+    refdomains: result.refdomains,
+    domain,
+  })
   const stampedBacklinks = stampPayload(result, domain, {
     foreignRowsDropped: Number(result.summary?.droppedWrongTarget || 0) || 0,
   })
@@ -3210,6 +3223,93 @@ app.get('/api/competitors/aggregated', expensiveLimiter, async (req, res) => {
     ourKeywords = []
   }
   result.gaps = computeCompetitorGaps(ourKeywords, compIntegrity.rows)
+
+  // Real keyword gap matrix: pull ranked keywords for top 3 competitors (soft, limited rows).
+  const competitorKeywordSets: Array<{ competitor: string; keywords: KeywordRow[] }> = []
+  if (DATAFORSEO_AUTH || SEMRUSH_API_KEY || SERPSTAT_API_KEY) {
+    const topComps = compIntegrity.rows
+      .slice()
+      .sort((a: any, b: any) => (Number(b.commonKeywords) || 0) - (Number(a.commonKeywords) || 0) || (Number(b.traffic) || 0) - (Number(a.traffic) || 0))
+      .map((c: any) => canonicalizeDomain(c.domain))
+      .filter(Boolean)
+      .slice(0, 3)
+
+    await Promise.all(
+      topComps.map(async (compDomain: string) => {
+        const collected: KeywordRow[] = []
+        // DataForSEO ranked keywords for competitor
+        if (DATAFORSEO_AUTH) {
+          try {
+            const r = await axios.post(
+              'https://api.dataforseo.com/v3/dataforseo_labs/google/ranked_keywords/live',
+              [{ target: compDomain, language_name: pack.dfsLanguageName, location_code: pack.dfsLocationCode, limit: 40 }],
+              { headers: { Authorization: `Basic ${DATAFORSEO_AUTH}`, 'Content-Type': 'application/json' }, timeout: 20000 },
+            )
+            collected.push(...keywordsFromDataForSEO(r.data))
+          } catch {
+            // soft
+          }
+        }
+        // SEMrush organic keywords as backup / enrichment
+        if (SEMRUSH_API_KEY && collected.length < 15) {
+          try {
+            const r = await axios.get('https://api.semrush.com/', {
+              params: {
+                type: 'domain_organic',
+                key: SEMRUSH_API_KEY,
+                domain: compDomain,
+                database: pack.semrushDatabase,
+                display_limit: 40,
+                export_columns: 'Ph,Po,Pp,Nq,Cp,Co,Kd,Ur,Tr,Tc,Nr,Td',
+              },
+              timeout: 15000,
+            })
+            collected.push(...keywordsFromSemrush(parseSemrushCSV(r.data)))
+          } catch {
+            // soft
+          }
+        }
+        // Serpstat as third soft source
+        if (SERPSTAT_API_KEY && collected.length < 10) {
+          try {
+            const r = await serpstatRpc('SerpstatDomainProcedure.getDomainKeywords', {
+              domain: compDomain,
+              se: pack.serpstatSe,
+              page: 1,
+              size: 30,
+            })
+            collected.push(...keywordsFromSerpstat(r))
+          } catch {
+            // soft
+          }
+        }
+        const merged = mergeKeywordRows([collected]).slice(0, 60)
+        if (merged.length) competitorKeywordSets.push({ competitor: compDomain, keywords: merged })
+      }),
+    )
+  }
+
+  result.keywordGap = buildKeywordGapMatrix(ourKeywords, competitorKeywordSets)
+  // Annotate gap estimate cards with real missing counts when available
+  if (Array.isArray(result.gaps) && result.keywordGap?.rows?.length) {
+    const missingByComp = new Map<string, number>()
+    for (const row of result.keywordGap.rows) {
+      if (row.kind !== 'missing') continue
+      const key = canonicalizeDomain(row.competitor)
+      missingByComp.set(key, (missingByComp.get(key) || 0) + 1)
+    }
+    result.gaps = result.gaps.map((g: any) => {
+      const real = missingByComp.get(canonicalizeDomain(g.competitor))
+      if (real == null) return g
+      return {
+        ...g,
+        realMissingCount: real,
+        ourMissingEstimate: real,
+        note: `Live intersection vs matrix: ${real} missing keywords (they rank, we don't in tracked set).`,
+      }
+    })
+  }
+
   const stampedCompetitors = stampPayload(result, domain, {
     giantsDropped: compIntegrity.giantsDropped,
     selfRowsDropped: compIntegrity.selfRowsDropped,
@@ -4048,6 +4148,61 @@ app.get('/api/command-center', async (_req, res) => {
   movements.newEntries.sort((a, b) => (b.volume || 0) - (a.volume || 0))
   gaps.sort((a, b) => (b.ourMissingEstimate || 0) - (a.ourMissingEstimate || 0))
 
+  // Surface top portfolio-wide keyword opportunities + link cleanups when snapshot intel exists
+  const opportunityFeed: Array<{
+    domain: string
+    keyword?: string
+    kind: string
+    position?: number | null
+    volume?: number | null
+    reason?: string
+    module: 'keywords' | 'backlinks' | 'competitors'
+  }> = []
+  await Promise.all(
+    uniqueFocus.slice(0, 8).map(async (domain) => {
+      try {
+        const [kwSnap, blSnap] = await Promise.all([
+          loadSnapshotPayload(domain, 'keywords_agg'),
+          loadSnapshotPayload(domain, 'backlinks_agg'),
+        ])
+        const rows = Array.isArray(kwSnap?.data?.normalized) ? kwSnap!.data.normalized : []
+        const intel = kwSnap?.data?.intel || (rows.length ? computeKeywordIntel(rows) : null)
+        for (const o of (intel?.opportunities || []).slice(0, 3)) {
+          opportunityFeed.push({
+            domain,
+            keyword: o.keyword,
+            kind: o.kind,
+            position: o.position,
+            volume: o.volume,
+            reason: o.reason,
+            module: 'keywords',
+          })
+        }
+        const linkIntel =
+          blSnap?.data?.linkIntel ||
+          (blSnap?.data
+            ? computeLinkIntel({
+                normalizedLinks: blSnap.data.normalized || [],
+                refdomains: blSnap.data.refdomains || [],
+                domain,
+              })
+            : null)
+        for (const o of (linkIntel?.opportunities || []).filter((x: any) => x.kind === 'cleanup_spam' || x.kind === 'strengthen').slice(0, 2)) {
+          opportunityFeed.push({
+            domain,
+            keyword: o.domain,
+            kind: o.kind,
+            reason: o.reason,
+            module: 'backlinks',
+          })
+        }
+      } catch {
+        // soft
+      }
+    }),
+  )
+  opportunityFeed.sort((a, b) => (b.volume || 0) - (a.volume || 0))
+
   res.json({
     kpis: {
       projects: projects.length,
@@ -4060,6 +4215,7 @@ app.get('/api/command-center', async (_req, res) => {
       serviceRole: Boolean(supabaseAdmin),
       movementSignals: movements.declined.length + movements.improved.length + movements.newEntries.length,
       gapSignals: gaps.length,
+      opportunitySignals: opportunityFeed.length,
     },
     worst,
     hottestAlerts,
@@ -4069,6 +4225,7 @@ app.get('/api/command-center', async (_req, res) => {
       newEntries: movements.newEntries.slice(0, 12),
     },
     gaps: gaps.slice(0, 15),
+    opportunities: opportunityFeed.slice(0, 18),
     softDegraded: softDegraded.slice(0, 10),
     source: result.source,
     warning: result.warning || null,
