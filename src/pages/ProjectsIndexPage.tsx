@@ -198,7 +198,7 @@ function VirtualProjectGrid({ projects, onSelect }: { projects: any[]; onSelect:
                 transform: `translateY(${virtualRow.start}px)`,
               }}
             >
-              <div className="grid grid-cols-1 gap-3 lg:grid-cols-2 xl:grid-cols-3 px-0.5">
+              <div className="px-0.5">
                 <button onClick={() => onSelect(project.domain)} className="rounded-2xl border border-border bg-bg-darkest p-4 text-left transition-colors hover:border-accent/50 hover:bg-white/[0.04]">
                   {project.screenshotUrl && (
                     <div className="mb-3 overflow-hidden rounded-xl border border-white/10">
