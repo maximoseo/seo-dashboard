@@ -1,5 +1,6 @@
-import { useMemo, useState } from 'react'
+import { useMemo, useState, useRef } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
+import { useVirtualizer } from '@tanstack/react-virtual'
 import DataStateBadge from '@/components/DataStateBadge'
 import ProjectStatusBadge from '@/components/project/ProjectStatusBadge'
 import { DataCard } from '@/components/DataCard'
@@ -152,36 +153,81 @@ export default function ProjectsIndexPage() {
           </div>
         )}
 
-        <div className="mt-4 grid grid-cols-1 gap-3 lg:grid-cols-2 xl:grid-cols-3">
-          {filtered.map(project => (
-            <button key={project.id} onClick={() => setActiveProject(project.domain)} className="rounded-2xl border border-border bg-bg-darkest p-4 text-left transition-colors hover:border-accent/50 hover:bg-white/[0.04]">
-              {project.screenshotUrl && (
-                <div className="mb-3 overflow-hidden rounded-xl border border-white/10">
-                  <img src={project.screenshotUrl} alt={`${project.domain} preview`} className="h-32 w-full object-cover object-top" loading="lazy" onError={(e) => { (e.target as HTMLImageElement).style.display = 'none' }} />
-                </div>
-              )}
-              <div className="flex items-start justify-between gap-3">
-                <div className="min-w-0">
-                  <p className="truncate text-base font-semibold text-fg">{project.name}</p>
-                  <p className="mt-1 truncate text-sm text-fg-muted">{project.domain}</p>
-                  <p className="mt-0.5 truncate text-xs text-fg-dim">{project.clientName} • {project.market}</p>
-                </div>
-                <ProjectStatusBadge status={project.status} />
-              </div>
-              <div className="mt-4 grid grid-cols-3 gap-2">
-                <span className="rounded-xl border border-white/10 bg-white/[0.03] p-2"><span className="block text-[10px] text-fg-dim">Health</span><b className="text-lg text-fg">{project.healthScore ?? '—'}</b></span>
-                <span className="rounded-xl border border-white/10 bg-white/[0.03] p-2"><span className="block text-[10px] text-fg-dim">Alerts</span><b className="text-lg text-fg">{project.alertCount}</b></span>
-                <span className="rounded-xl border border-white/10 bg-white/[0.03] p-2"><span className="block text-[10px] text-fg-dim">Tasks</span><b className="text-lg text-fg">{project.taskCount}</b></span>
-              </div>
-              <div className="mt-4 flex items-center justify-between gap-2">
-                <DataStateBadge state={project.dataState} fetchedAt={project.lastFetchedAt} />
-                <span className="text-xs font-medium text-accent-light">Open workspace →</span>
-              </div>
-            </button>
-          ))}
-        </div>
+        {/* Virtual scrolling for 39+ projects — only renders visible items */}
+        <VirtualProjectGrid projects={filtered} onSelect={setActiveProject} />
       </DataCard>
       <CreateProjectModal open={showCreate} onClose={() => setShowCreate(false)} onCreated={refreshProjects} />
+    </div>
+  )
+}
+
+/** Virtualized grid — renders only visible project cards */
+function VirtualProjectGrid({ projects, onSelect }: { projects: any[]; onSelect: (domain: string) => void }) {
+  const parentRef = useRef<HTMLDivElement>(null)
+  const virtualizer = useVirtualizer({
+    count: projects.length,
+    getScrollElement: () => parentRef.current,
+    estimateSize: () => 220, // estimated card height
+    overscan: 5,
+  })
+
+  return (
+    <div
+      ref={parentRef}
+      className="mt-4 overflow-auto"
+      style={{ maxHeight: 'calc(100vh - 280px)' }}
+    >
+      <div
+        style={{
+          height: `${virtualizer.getTotalSize()}px`,
+          width: '100%',
+          position: 'relative',
+        }}
+      >
+        {virtualizer.getVirtualItems().map(virtualRow => {
+          const project = projects[virtualRow.index]
+          return (
+            <div
+              key={project.id}
+              style={{
+                position: 'absolute',
+                top: 0,
+                left: 0,
+                width: '100%',
+                height: `${virtualRow.size}px`,
+                transform: `translateY(${virtualRow.start}px)`,
+              }}
+            >
+              <div className="grid grid-cols-1 gap-3 lg:grid-cols-2 xl:grid-cols-3 px-0.5">
+                <button onClick={() => onSelect(project.domain)} className="rounded-2xl border border-border bg-bg-darkest p-4 text-left transition-colors hover:border-accent/50 hover:bg-white/[0.04]">
+                  {project.screenshotUrl && (
+                    <div className="mb-3 overflow-hidden rounded-xl border border-white/10">
+                      <img src={project.screenshotUrl} alt={`${project.domain} preview`} className="h-32 w-full object-cover object-top" loading="lazy" onError={(e) => { (e.target as HTMLImageElement).style.display = 'none' }} />
+                    </div>
+                  )}
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <p className="truncate text-base font-semibold text-fg">{project.name}</p>
+                      <p className="mt-1 truncate text-sm text-fg-muted">{project.domain}</p>
+                      <p className="mt-0.5 truncate text-xs text-fg-dim">{project.clientName} • {project.market}</p>
+                    </div>
+                    <ProjectStatusBadge status={project.status} />
+                  </div>
+                  <div className="mt-4 grid grid-cols-3 gap-2">
+                    <span className="rounded-xl border border-white/10 bg-white/[0.03] p-2"><span className="block text-[10px] text-fg-dim">Health</span><b className="text-lg text-fg">{project.healthScore ?? '—'}</b></span>
+                    <span className="rounded-xl border border-white/10 bg-white/[0.03] p-2"><span className="block text-[10px] text-fg-dim">Alerts</span><b className="text-lg text-fg">{project.alertCount}</b></span>
+                    <span className="rounded-xl border border-white/10 bg-white/[0.03] p-2"><span className="block text-[10px] text-fg-dim">Tasks</span><b className="text-lg text-fg">{project.taskCount}</b></span>
+                  </div>
+                  <div className="mt-4 flex items-center justify-between gap-2">
+                    <DataStateBadge state={project.dataState} fetchedAt={project.lastFetchedAt} />
+                    <span className="text-xs font-medium text-accent-light">Open workspace →</span>
+                  </div>
+                </button>
+              </div>
+            </div>
+          )
+        })}
+      </div>
     </div>
   )
 }
