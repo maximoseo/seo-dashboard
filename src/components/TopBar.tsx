@@ -55,7 +55,8 @@ export default function TopBar({ title = 'Dashboard', subtitle = "Overview of yo
         <div className="flex items-center gap-3 min-w-0">
           <button
             onClick={onMenuClick}
-            className="lg:hidden flex items-center justify-center w-10 h-10 -ml-1 rounded-xl text-fg-muted hover:text-fg hover:bg-white/[0.06] transition-colors touch-target-reset"
+            className="lg:hidden flex items-center justify-center w-11 h-11 -ml-1 rounded-xl text-fg-muted hover:text-fg hover:bg-white/[0.06] transition-colors touch-target-reset"
+            aria-label="Open menu"
           >
             <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
               <path d="M3 5h14M3 10h14M3 15h14" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
@@ -78,7 +79,7 @@ export default function TopBar({ title = 'Dashboard', subtitle = "Overview of yo
               </nav>
             )}
             <div className="flex flex-wrap items-center gap-2">
-              <h1 className="text-lg md:text-xl lg:text-2xl font-bold text-fg truncate">{title}</h1>
+              <h1 className="text-base md:text-xl lg:text-2xl font-bold text-fg truncate">{title}</h1>
               {activeProject && <DataStateBadge state={activeProject.dataState} fetchedAt={activeProject.lastFetchedAt} className="hidden md:inline-flex" />}
             </div>
             <p className="text-xs md:text-sm text-fg-muted mt-0.5 truncate hidden sm:block">{subtitle}</p>

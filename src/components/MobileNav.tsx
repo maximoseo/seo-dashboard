@@ -63,7 +63,7 @@ export default function MobileNav({ activeNav, onNavChange }: { activeNav: strin
                     <button
                       key={item.name}
                       onClick={() => handleItemClick(item.name)}
-                      className={`flex flex-col items-center gap-1.5 px-2 py-3 rounded-xl text-[11px] font-medium transition-colors touch-target-reset ${
+                      className={`flex flex-col items-center gap-1.5 px-2 py-3 rounded-xl text-[11px] font-medium transition-colors min-h-[44px] ${
                         isActive ? 'text-accent bg-accent/10' : 'text-fg-dim hover:text-fg-muted'
                       }`}
                     >
@@ -87,7 +87,7 @@ export default function MobileNav({ activeNav, onNavChange }: { activeNav: strin
               <button
                 key={item.name}
                 onClick={() => handleItemClick(item.name)}
-                className={`relative flex flex-col items-center gap-0.5 px-4 py-2 rounded-xl text-[10px] font-medium transition-all touch-target-reset ${
+                className={`relative flex flex-col items-center gap-0.5 px-4 py-2 rounded-xl text-[10px] font-medium transition-all min-h-[44px] ${
                   isActive ? 'text-accent' : 'text-fg-dim'
                 }`}
               >

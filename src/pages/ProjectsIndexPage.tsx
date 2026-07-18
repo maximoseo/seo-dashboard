@@ -174,7 +174,7 @@ function VirtualProjectGrid({ projects, onSelect }: { projects: any[]; onSelect:
   return (
     <div
       ref={parentRef}
-      className="mt-4 overflow-auto"
+      className="mt-4 overflow-auto virtual-scroll"
       style={{ maxHeight: 'calc(100vh - 280px)' }}
     >
       <div
@@ -199,9 +199,9 @@ function VirtualProjectGrid({ projects, onSelect }: { projects: any[]; onSelect:
               }}
             >
               <div className="px-0.5">
-                <button onClick={() => onSelect(project.domain)} className="rounded-2xl border border-border bg-bg-darkest p-4 text-left transition-colors hover:border-accent/50 hover:bg-white/[0.04]">
+                <button onClick={() => onSelect(project.domain)} className="rounded-2xl border border-border bg-bg-darkest p-3 md:p-4 text-left transition-colors hover:border-accent/50 hover:bg-white/[0.04] w-full">
                   {project.screenshotUrl && (
-                    <div className="mb-3 overflow-hidden rounded-xl border border-white/10">
+                    <div className="mb-3 overflow-hidden rounded-xl border border-white/10 hidden min-[380px]:block">
                       <img src={project.screenshotUrl} alt={`${project.domain} preview`} className="h-32 w-full object-cover object-top" loading="lazy" onError={(e) => { (e.target as HTMLImageElement).style.display = 'none' }} />
                     </div>
                   )}
@@ -213,12 +213,12 @@ function VirtualProjectGrid({ projects, onSelect }: { projects: any[]; onSelect:
                     </div>
                     <ProjectStatusBadge status={project.status} />
                   </div>
-                  <div className="mt-4 grid grid-cols-3 gap-2">
-                    <span className="rounded-xl border border-white/10 bg-white/[0.03] p-2"><span className="block text-[10px] text-fg-dim">Health</span><b className="text-lg text-fg">{project.healthScore ?? '—'}</b></span>
-                    <span className="rounded-xl border border-white/10 bg-white/[0.03] p-2"><span className="block text-[10px] text-fg-dim">Alerts</span><b className="text-lg text-fg">{project.alertCount}</b></span>
-                    <span className="rounded-xl border border-white/10 bg-white/[0.03] p-2"><span className="block text-[10px] text-fg-dim">Tasks</span><b className="text-lg text-fg">{project.taskCount}</b></span>
+                  <div className="mt-3 md:mt-4 grid grid-cols-3 gap-1.5 md:gap-2">
+                    <span className="rounded-lg md:rounded-xl border border-white/10 bg-white/[0.03] p-1.5 md:p-2"><span className="block text-[10px] text-fg-dim">Health</span><b className="text-base md:text-lg text-fg">{project.healthScore ?? '—'}</b></span>
+                    <span className="rounded-lg md:rounded-xl border border-white/10 bg-white/[0.03] p-1.5 md:p-2"><span className="block text-[10px] text-fg-dim">Alerts</span><b className="text-base md:text-lg text-fg">{project.alertCount}</b></span>
+                    <span className="rounded-lg md:rounded-xl border border-white/10 bg-white/[0.03] p-1.5 md:p-2"><span className="block text-[10px] text-fg-dim">Tasks</span><b className="text-base md:text-lg text-fg">{project.taskCount}</b></span>
                   </div>
-                  <div className="mt-4 flex items-center justify-between gap-2">
+                  <div className="mt-3 md:mt-4 flex items-center justify-between gap-2">
                     <DataStateBadge state={project.dataState} fetchedAt={project.lastFetchedAt} />
                     <span className="text-xs font-medium text-accent-light">Open workspace →</span>
                   </div>

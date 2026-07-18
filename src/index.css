@@ -59,6 +59,7 @@ body {
   overscroll-behavior-y: contain;
   overflow-x: clip;
   touch-action: manipulation;
+  -webkit-overflow-scrolling: touch;
 }
 
 @media (max-width: 767px) {
@@ -245,6 +246,12 @@ select {
     overflow-y: auto;
     overscroll-behavior: contain;
   }
+}
+
+/* Virtualizer smooth scrolling */
+.virtual-scroll {
+  scroll-behavior: smooth;
+  -webkit-overflow-scrolling: touch;
 }
 
 /* Project tabs: prevent horizontal scroll from hijacking vertical swipe */
