@@ -549,7 +549,8 @@ export default function ProjectsIndexPage() {
   )
 }
 
-/** Virtualized list with grouping, pinning, selection, keyboard nav, grid/list views */
+/** Virtualized list with grouping, pinning, selection, keyboard nav, grid/list views.
+ * Desktop renders 2–3 cards per row (responsive); mobile renders 1. */
 function VirtualProjectList({
   items,
   viewMode,
@@ -578,14 +579,61 @@ function VirtualProjectList({
   onOpen: (domain: string) => void
 }) {
   const parentRef = useRef<HTMLDivElement>(null)
+
+  // Responsive column count via container width
+  const [containerWidth, setContainerWidth] = useState(1024)
+  useEffect(() => {
+    const el = parentRef.current
+    if (!el) return
+    setContainerWidth(el.clientWidth)
+    const ro = new ResizeObserver(entries => {
+      for (const entry of entries) setContainerWidth(entry.contentRect.width)
+    })
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [])
+
+  const columns = useMemo(() => {
+    if (viewMode === 'list') return 1
+    if (containerWidth >= 1280) return 3
+    if (containerWidth >= 860) return 2
+    return 1
+  }, [viewMode, containerWidth])
+
+  const GRID_CARD_H = 300
+  const LIST_ROW_H = 64
+
+  // Chunk consecutive projects into rows of `columns`; headers stay full-width
+  type Row =
+    | { kind: 'header'; item: (typeof items)[number] }
+    | { kind: 'projects'; projects: ProjectSummary[] }
+
+  const rows = useMemo<Row[]>(() => {
+    const out: Row[] = []
+    let buffer: ProjectSummary[] = []
+    const flush = () => {
+      while (buffer.length) out.push({ kind: 'projects', projects: buffer.splice(0, columns) })
+    }
+    for (const item of items) {
+      if (item.type === 'project' && item.project) {
+        buffer.push(item.project)
+        if (buffer.length === columns) flush()
+      } else {
+        flush()
+        out.push({ kind: 'header', item })
+      }
+    }
+    flush()
+    return out
+  }, [items, columns])
+
   const virtualizer = useVirtualizer({
-    count: items.length,
+    count: rows.length,
     getScrollElement: () => parentRef.current,
     estimateSize: index => {
-      const item = items[index]
-      if (item.type === 'group-header') return 44
-      if (item.type === 'pinned') return 32
-      return viewMode === 'grid' ? 220 : 64
+      const row = rows[index]
+      if (row.kind === 'header') return row.item.type === 'group-header' ? 44 : 32
+      return viewMode === 'grid' ? GRID_CARD_H : LIST_ROW_H
     },
     overscan: 8,
   })
@@ -610,205 +658,219 @@ function VirtualProjectList({
         }}
       >
         {virtualizer.getVirtualItems().map(virtualRow => {
-          const item = items[virtualRow.index]
-          const isGroupHeader = item.type === 'group-header'
-          const isPinnedHeader = item.type === 'pinned'
-          const project = item.project
+          const row = rows[virtualRow.index]
 
-          if (isPinnedHeader) {
-            return (
-              <div
-                key="pinned-header"
-                style={{
-                  position: 'absolute',
-                  top: 0,
-                  left: 0,
-                  width: '100%',
-                  height: `${virtualRow.size}px`,
-                  transform: `translateY(${virtualRow.start}px)`,
-                }}
-              >
-                <div className="flex items-center gap-2 px-1 py-1 text-[11px] font-semibold uppercase tracking-wide text-accent-light">
-                  <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor"><path d="M8 1l2.1 4.3 4.9.7-3.5 3.4.8 4.8L8 12l-4.3 2.2.8-4.8L1 6l4.9-.7L8 1z"/></svg>
-                  Pinned
-                </div>
-              </div>
-            )
-          }
-
-          if (isGroupHeader && item.group) {
-            const g = item.group
-            const isExpanded = expandedGroups[g.clientName] !== false // default expanded
-            return (
-              <div
-                key={`group-${g.clientName}`}
-                style={{
-                  position: 'absolute',
-                  top: 0,
-                  left: 0,
-                  width: '100%',
-                  height: `${virtualRow.size}px`,
-                  transform: `translateY(${virtualRow.start}px)`,
-                }}
-              >
-                <button
-                  onClick={() => onToggleGroup(g.clientName)}
-                  className="flex w-full items-center justify-between gap-2 rounded-lg border border-border bg-bg-darkest px-3 py-2 text-left hover:border-border-light"
-                >
-                  <div className="flex items-center gap-2">
-                    <svg width="14" height="14" viewBox="0 0 16 16" fill="none" className={`transition-transform ${isExpanded ? 'rotate-90' : ''}`}>
-                      <path d="M6 4l4 4-4 4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
-                    </svg>
-                    <span className="text-sm font-semibold text-fg">{g.clientName}</span>
-                    <span className="rounded-full border border-white/10 bg-white/[0.04] px-2 py-0.5 text-[10px] text-fg-dim">{g.projects.length}</span>
-                  </div>
-                  {g.avgHealth != null && (
-                    <span className={`text-xs font-medium ${g.avgHealth >= 80 ? 'text-green-300' : g.avgHealth >= 60 ? 'text-yellow-300' : 'text-red-300'}`}>
-                      Avg health {g.avgHealth}
-                    </span>
-                  )}
-                </button>
-              </div>
-            )
-          }
-
-          if (!project) return null
-
-          const isSelected = selectedIds.has(project.id)
-          const isPinned = pinned.includes(project.id)
-          const projectKbIndex = projectIndexMap.get(project.id) ?? -1
-          const isKbActive = projectKbIndex === kbIndex && kbIndex >= 0
-
-          if (viewMode === 'list') {
-            return (
-              <div
-                key={project.id}
-                style={{
-                  position: 'absolute',
-                  top: 0,
-                  left: 0,
-                  width: '100%',
-                  height: `${virtualRow.size}px`,
-                  transform: `translateY(${virtualRow.start}px)`,
-                }}
-              >
+          if (row.kind === 'header') {
+            const item = row.item
+            if (item.type === 'pinned') {
+              return (
                 <div
-                  className={`flex items-center gap-3 rounded-xl border px-3 py-2 transition-colors ${
-                    isKbActive ? 'border-accent bg-accent/10' : 'border-border bg-bg-darkest hover:border-border-light'
-                  } ${isSelected ? 'ring-1 ring-accent' : ''}`}
+                  key="pinned-header"
+                  style={{
+                    position: 'absolute', top: 0, left: 0, width: '100%',
+                    height: `${virtualRow.size}px`,
+                    transform: `translateY(${virtualRow.start}px)`,
+                  }}
                 >
-                  {selectMode && (
-                    <input
-                      type="checkbox"
-                      checked={isSelected}
-                      onChange={() => onToggleSelect(project.id)}
-                      className="h-4 w-4 rounded border-border bg-bg-darkest accent-accent"
-                      onClick={e => e.stopPropagation()}
-                    />
-                  )}
+                  <div className="flex items-center gap-2 px-1 py-1 text-[11px] font-semibold uppercase tracking-wide text-accent-light">
+                    <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor"><path d="M8 1l2.1 4.3 4.9.7-3.5 3.4.8 4.8L8 12l-4.3 2.2.8-4.8L1 6l4.9-.7L8 1z"/></svg>
+                    Pinned
+                  </div>
+                </div>
+              )
+            }
+            if (item.type === 'group-header' && item.group) {
+              const g = item.group
+              const isExpanded = expandedGroups[g.clientName] !== false
+              return (
+                <div
+                  key={`group-${g.clientName}`}
+                  style={{
+                    position: 'absolute', top: 0, left: 0, width: '100%',
+                    height: `${virtualRow.size}px`,
+                    transform: `translateY(${virtualRow.start}px)`,
+                  }}
+                >
                   <button
-                    onClick={() => (selectMode ? onToggleSelect(project.id) : onOpen(project.domain))}
-                    className="flex min-w-0 flex-1 items-center gap-3 text-left"
+                    onClick={() => onToggleGroup(g.clientName)}
+                    className="flex w-full items-center justify-between gap-2 rounded-lg border border-border bg-bg-darkest px-3 py-2 text-left hover:border-border-light"
                   >
-                    <div className="min-w-0 flex-1">
-                      <p className="truncate text-sm font-semibold text-fg">{project.name}</p>
-                      <p className="truncate text-xs text-fg-dim">{project.domain}</p>
+                    <div className="flex items-center gap-2">
+                      <svg width="14" height="14" viewBox="0 0 16 16" fill="none" className={`transition-transform ${isExpanded ? 'rotate-90' : ''}`}>
+                        <path d="M6 4l4 4-4 4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+                      </svg>
+                      <span className="text-sm font-semibold text-fg">{g.clientName}</span>
+                      <span className="rounded-full border border-white/10 bg-white/[0.04] px-2 py-0.5 text-[10px] text-fg-dim">{g.projects.length}</span>
                     </div>
-                    <div className="hidden md:block w-20 text-right">
-                      <span className="text-xs text-fg-dim">Health</span>
-                      <p className="text-sm font-medium text-fg">{project.healthScore ?? '—'}</p>
-                    </div>
-                    <div className="hidden md:block w-16 text-right">
-                      <span className="text-xs text-fg-dim">Alerts</span>
-                      <p className="text-sm font-medium text-fg">{project.alertCount}</p>
-                    </div>
-                    <div className="hidden md:block w-16 text-right">
-                      <span className="text-xs text-fg-dim">Tasks</span>
-                      <p className="text-sm font-medium text-fg">{project.taskCount}</p>
-                    </div>
-                    <ProjectStatusBadge status={project.status} />
-                  </button>
-                  <button
-                    onClick={e => { e.stopPropagation(); onTogglePin(project.id) }}
-                    className={`p-1 ${isPinned ? 'text-yellow-400' : 'text-fg-dim hover:text-fg'}`}
-                    title={isPinned ? 'Unpin' : 'Pin'}
-                  >
-                    <svg width="14" height="14" viewBox="0 0 16 16" fill={isPinned ? 'currentColor' : 'none'} stroke="currentColor" strokeWidth="1.5">
-                      <path d="M8 1l2.1 4.3 4.9.7-3.5 3.4.8 4.8L8 12l-4.3 2.2.8-4.8L1 6l4.9-.7L8 1z"/>
-                    </svg>
+                    {g.avgHealth != null && (
+                      <span className={`text-xs font-medium ${g.avgHealth >= 80 ? 'text-green-300' : g.avgHealth >= 60 ? 'text-yellow-300' : 'text-red-300'}`}>
+                        Avg health {g.avgHealth}
+                      </span>
+                    )}
                   </button>
                 </div>
-              </div>
-            )
+              )
+            }
+            return null
           }
 
-          // Grid card
           return (
             <div
-              key={project.id}
+              key={`row-${virtualRow.index}`}
               style={{
-                position: 'absolute',
-                top: 0,
-                left: 0,
-                width: '100%',
+                position: 'absolute', top: 0, left: 0, width: '100%',
                 height: `${virtualRow.size}px`,
                 transform: `translateY(${virtualRow.start}px)`,
               }}
             >
-              <div className="px-0.5">
-                <div
-                  className={`relative rounded-2xl border p-3 md:p-4 text-left transition-colors ${
-                    isKbActive ? 'border-accent bg-accent/10' : 'border-border bg-bg-darkest hover:border-accent/50 hover:bg-white/[0.04]'
-                  } ${isSelected ? 'ring-1 ring-accent' : ''}`}
-                >
-                  {selectMode && (
-                    <input
-                      type="checkbox"
-                      checked={isSelected}
-                      onChange={() => onToggleSelect(project.id)}
-                      className="absolute left-3 top-3 z-10 h-4 w-4 rounded border-border bg-bg-darkest accent-accent"
-                      onClick={e => e.stopPropagation()}
-                    />
-                  )}
-                  <button
-                    onClick={e => { e.stopPropagation(); onTogglePin(project.id) }}
-                    className={`absolute right-3 top-3 z-10 p-1 ${isPinned ? 'text-yellow-400' : 'text-fg-dim hover:text-fg'}`}
-                    title={isPinned ? 'Unpin' : 'Pin'}
-                  >
-                    <svg width="14" height="14" viewBox="0 0 16 16" fill={isPinned ? 'currentColor' : 'none'} stroke="currentColor" strokeWidth="1.5">
-                      <path d="M8 1l2.1 4.3 4.9.7-3.5 3.4.8 4.8L8 12l-4.3 2.2.8-4.8L1 6l4.9-.7L8 1z"/>
-                    </svg>
-                  </button>
-                  <button onClick={() => (selectMode ? onToggleSelect(project.id) : onOpen(project.domain))} className="w-full text-left">
-                    {project.screenshotUrl && (
-                      <div className="mb-3 overflow-hidden rounded-xl border border-white/10 hidden min-[380px]:block">
-                        <img src={project.screenshotUrl} alt={`${project.domain} preview`} className="h-32 w-full object-cover object-top" loading="lazy" onError={(e) => { (e.target as HTMLImageElement).style.display = 'none' }} />
-                      </div>
-                    )}
-                    <div className="flex items-start justify-between gap-3">
-                      <div className="min-w-0">
-                        <p className="truncate text-base font-semibold text-fg">{project.name}</p>
-                        <p className="mt-1 truncate text-sm text-fg-muted">{project.domain}</p>
-                        <p className="mt-0.5 truncate text-xs text-fg-dim">{project.clientName} • {project.market}</p>
-                      </div>
-                      <ProjectStatusBadge status={project.status} />
-                    </div>
-                    <div className="mt-3 md:mt-4 grid grid-cols-3 gap-1.5 md:gap-2">
-                      <span className="rounded-lg md:rounded-xl border border-white/10 bg-white/[0.03] p-1.5 md:p-2"><span className="block text-[10px] text-fg-dim">Health</span><b className="text-base md:text-lg text-fg">{project.healthScore ?? '—'}</b></span>
-                      <span className="rounded-lg md:rounded-xl border border-white/10 bg-white/[0.03] p-1.5 md:p-2"><span className="block text-[10px] text-fg-dim">Alerts</span><b className="text-base md:text-lg text-fg">{project.alertCount}</b></span>
-                      <span className="rounded-lg md:rounded-xl border border-white/10 bg-white/[0.03] p-1.5 md:p-2"><span className="block text-[10px] text-fg-dim">Tasks</span><b className="text-base md:text-lg text-fg">{project.taskCount}</b></span>
-                    </div>
-                    <div className="mt-3 md:mt-4 flex items-center justify-between gap-2">
-                      <DataStateBadge state={project.dataState} fetchedAt={project.lastFetchedAt} />
-                      <span className="text-xs font-medium text-accent-light">{selectMode ? 'Click to select' : 'Open workspace →'}</span>
-                    </div>
-                  </button>
-                </div>
+              <div
+                className={viewMode === 'list' ? 'flex flex-col gap-2 px-0.5' : 'grid gap-3 px-0.5'}
+                style={viewMode === 'list' ? undefined : { gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))` }}
+              >
+                {row.projects.map(project => (
+                  <ProjectCard
+                    key={project.id}
+                    project={project}
+                    viewMode={viewMode}
+                    selectMode={selectMode}
+                    isSelected={selectedIds.has(project.id)}
+                    isPinned={pinned.includes(project.id)}
+                    isKbActive={(projectIndexMap.get(project.id) ?? -1) === kbIndex && kbIndex >= 0}
+                    onToggleSelect={onToggleSelect}
+                    onTogglePin={onTogglePin}
+                    onOpen={onOpen}
+                  />
+                ))}
               </div>
             </div>
           )
         })}
       </div>
+    </div>
+  )
+}
+
+/** Single project card (grid) or row (list) */
+function ProjectCard({
+  project,
+  viewMode,
+  selectMode,
+  isSelected,
+  isPinned,
+  isKbActive,
+  onToggleSelect,
+  onTogglePin,
+  onOpen,
+}: {
+  project: ProjectSummary
+  viewMode: ViewMode
+  selectMode: boolean
+  isSelected: boolean
+  isPinned: boolean
+  isKbActive: boolean
+  onToggleSelect: (id: string) => void
+  onTogglePin: (id: string) => void
+  onOpen: (domain: string) => void
+}) {
+  if (viewMode === 'list') {
+    return (
+      <div
+        className={`flex items-center gap-3 rounded-xl border px-3 py-2 transition-colors ${
+          isKbActive ? 'border-accent bg-accent/10' : 'border-border bg-bg-darkest hover:border-border-light'
+        } ${isSelected ? 'ring-1 ring-accent' : ''}`}
+      >
+        {selectMode && (
+          <input
+            type="checkbox"
+            checked={isSelected}
+            onChange={() => onToggleSelect(project.id)}
+            className="h-4 w-4 rounded border-border bg-bg-darkest accent-accent"
+            onClick={e => e.stopPropagation()}
+          />
+        )}
+        <button
+          onClick={() => (selectMode ? onToggleSelect(project.id) : onOpen(project.domain))}
+          className="flex min-w-0 flex-1 items-center gap-3 text-left"
+        >
+          <div className="min-w-0 flex-1">
+            <p className="truncate text-sm font-semibold text-fg">{project.name}</p>
+            <p className="truncate text-xs text-fg-dim">{project.domain}</p>
+          </div>
+          <div className="hidden md:block w-20 text-right">
+            <span className="text-xs text-fg-dim">Health</span>
+            <p className="text-sm font-medium text-fg">{project.healthScore ?? '\u2014'}</p>
+          </div>
+          <div className="hidden md:block w-16 text-right">
+            <span className="text-xs text-fg-dim">Alerts</span>
+            <p className="text-sm font-medium text-fg">{project.alertCount}</p>
+          </div>
+          <div className="hidden md:block w-16 text-right">
+            <span className="text-xs text-fg-dim">Tasks</span>
+            <p className="text-sm font-medium text-fg">{project.taskCount}</p>
+          </div>
+          <ProjectStatusBadge status={project.status} />
+        </button>
+        <button
+          onClick={e => { e.stopPropagation(); onTogglePin(project.id) }}
+          className={`p-1 ${isPinned ? 'text-yellow-400' : 'text-fg-dim hover:text-fg'}`}
+          title={isPinned ? 'Unpin' : 'Pin'}
+        >
+          <svg width="14" height="14" viewBox="0 0 16 16" fill={isPinned ? 'currentColor' : 'none'} stroke="currentColor" strokeWidth="1.5">
+            <path d="M8 1l2.1 4.3 4.9.7-3.5 3.4.8 4.8L8 12l-4.3 2.2.8-4.8L1 6l4.9-.7L8 1z"/>
+          </svg>
+        </button>
+      </div>
+    )
+  }
+
+  return (
+    <div
+      className={`relative rounded-2xl border p-3 md:p-4 text-left transition-colors ${
+        isKbActive ? 'border-accent bg-accent/10' : 'border-border bg-bg-darkest hover:border-accent/50 hover:bg-white/[0.04]'
+      } ${isSelected ? 'ring-1 ring-accent' : ''}`}
+    >
+      {selectMode && (
+        <input
+          type="checkbox"
+          checked={isSelected}
+          onChange={() => onToggleSelect(project.id)}
+          className="absolute left-3 top-3 z-10 h-4 w-4 rounded border-border bg-bg-darkest accent-accent"
+          onClick={e => e.stopPropagation()}
+        />
+      )}
+      <button
+        onClick={e => { e.stopPropagation(); onTogglePin(project.id) }}
+        className={`absolute right-3 top-3 z-10 p-1 ${isPinned ? 'text-yellow-400' : 'text-fg-dim hover:text-fg'}`}
+        title={isPinned ? 'Unpin' : 'Pin'}
+      >
+        <svg width="14" height="14" viewBox="0 0 16 16" fill={isPinned ? 'currentColor' : 'none'} stroke="currentColor" strokeWidth="1.5">
+          <path d="M8 1l2.1 4.3 4.9.7-3.5 3.4.8 4.8L8 12l-4.3 2.2.8-4.8L1 6l4.9-.7L8 1z"/>
+        </svg>
+      </button>
+      <button onClick={() => (selectMode ? onToggleSelect(project.id) : onOpen(project.domain))} className="w-full text-left">
+        {project.screenshotUrl && (
+          <div className="mb-3 overflow-hidden rounded-xl border border-white/10 hidden min-[380px]:block">
+            <img src={project.screenshotUrl} alt={`${project.domain} preview`} className="h-32 w-full object-cover object-top" loading="lazy" onError={(e) => { (e.target as HTMLImageElement).style.display = 'none' }} />
+          </div>
+        )}
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            <p className="truncate text-base font-semibold text-fg">{project.name}</p>
+            <p className="mt-1 truncate text-sm text-fg-muted">{project.domain}</p>
+            <p className="mt-0.5 truncate text-xs text-fg-dim">{project.clientName} \u2022 {project.market}</p>
+          </div>
+          <ProjectStatusBadge status={project.status} />
+        </div>
+        <div className="mt-3 md:mt-4 grid grid-cols-3 gap-1.5 md:gap-2">
+          <span className="rounded-lg md:rounded-xl border border-white/10 bg-white/[0.03] p-1.5 md:p-2"><span className="block text-[10px] text-fg-dim">Health</span><b className="text-base md:text-lg text-fg">{project.healthScore ?? '\u2014'}</b></span>
+          <span className="rounded-lg md:rounded-xl border border-white/10 bg-white/[0.03] p-1.5 md:p-2"><span className="block text-[10px] text-fg-dim">Alerts</span><b className="text-base md:text-lg text-fg">{project.alertCount}</b></span>
+          <span className="rounded-lg md:rounded-xl border border-white/10 bg-white/[0.03] p-1.5 md:p-2"><span className="block text-[10px] text-fg-dim">Tasks</span><b className="text-base md:text-lg text-fg">{project.taskCount}</b></span>
+        </div>
+        <div className="mt-3 md:mt-4 flex items-center justify-between gap-2">
+          <DataStateBadge state={project.dataState} fetchedAt={project.lastFetchedAt} />
+          <span className="text-xs font-medium text-accent-light">{selectMode ? 'Click to select' : 'Open workspace \u2192'}</span>
+        </div>
+      </button>
     </div>
   )
 }
