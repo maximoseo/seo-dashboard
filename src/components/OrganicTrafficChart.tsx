@@ -107,9 +107,13 @@ export default function OrganicTrafficChart({ dateRange, onDateRangeChange }: Pr
                   borderRadius: '8px',
                   color: '#fff',
                   fontSize: '12px',
+                  maxWidth: '200px',
                 }}
+                wrapperStyle={{ zIndex: 10, touchAction: 'none' }}
                 formatter={(value) => [fmt(Number(value)), 'Traffic'] as [string, string]}
                 labelStyle={{ color: '#9CA3AF' }}
+                position={{ y: 0 }}
+                allowEscapeViewBox={{ x: false, y: true }}
               />
               <Area
                 type="monotone"

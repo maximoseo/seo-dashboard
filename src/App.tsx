@@ -1,14 +1,17 @@
-import { lazy, Suspense, useState } from 'react'
+import { lazy, Suspense, useState, useCallback } from 'react'
 import { Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom'
+import { useQueryClient } from '@tanstack/react-query'
 import { motion, AnimatePresence } from 'framer-motion'
 import Sidebar from '@/components/Sidebar'
 import TopBar from '@/components/TopBar'
 import MobileNav from '@/components/MobileNav'
 import ErrorBoundary from '@/components/ErrorBoundary'
+import { PullToRefresh } from '@/components/PullToRefresh'
 import LoginPage from '@/pages/LoginPage'
 import { AhrefsProvider } from '@/contexts/AhrefsContext'
 import { SEOProvider } from '@/contexts/SEOContext'
 import { ProjectProvider, useProject } from '@/contexts/ProjectContext'
+import { ToastProvider } from '@/components/Toast'
 import { useAuth } from '@/contexts/AuthContext'
 import { buildProjectPath, getModuleFromPathname, legacyRouteToProjectModule, type ProjectModule } from '@/lib/projectRoutes'
 import { useKeyboardShortcuts } from '@/hooks/useKeyboardShortcuts'
@@ -133,6 +136,11 @@ function DashboardShellInner() {
         : { title: activeProject?.name || 'Project Workspace', subtitle: `${activeDomain} workspace overview and next actions` }
       : pageTitles[location.pathname] || pageTitles['/']
 
+  const queryClient = useQueryClient()
+  const handleRefresh = useCallback(async () => {
+    await queryClient.invalidateQueries()
+  }, [queryClient])
+
   const handleNavChange = (name: string) => {
     const route = navRouteMap[name]
     if (!route) return
@@ -185,6 +193,7 @@ function DashboardShellInner() {
 
         <div className="px-4 md:px-6 lg:px-8 py-5 lg:py-6">
           <ErrorBoundary key={location.pathname}>
+            <PullToRefresh onRefresh={handleRefresh}>
             <Suspense fallback={<div className="rounded-xl border border-border bg-bg-card p-6 text-sm text-fg-muted">Loading module…</div>}>
               <AnimatePresence mode="wait">
                 <motion.div
@@ -233,6 +242,7 @@ function DashboardShellInner() {
                 </motion.div>
               </AnimatePresence>
             </Suspense>
+            </PullToRefresh>
           </ErrorBoundary>
         </div>
       </main>
@@ -247,7 +257,9 @@ function DashboardShell() {
     <ProjectProvider>
       <SEOProvider>
         <AhrefsProvider>
+          <ToastProvider>
           <DashboardShellInner />
+          </ToastProvider>
         </AhrefsProvider>
       </SEOProvider>
     </ProjectProvider>

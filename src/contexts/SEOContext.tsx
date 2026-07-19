@@ -88,7 +88,11 @@ export function SEOProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     loadOverview()
-  }, [loadOverview])
+    // Auto-refresh overview every 5 minutes when a domain is active
+    if (!domain) return
+    const interval = setInterval(loadOverview, 5 * 60 * 1000)
+    return () => clearInterval(interval)
+  }, [loadOverview, domain])
 
   const setDomain = useCallback((d: string) => {
     setActiveProject(d, { preserveModule: true })
