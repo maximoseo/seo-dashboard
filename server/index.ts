@@ -240,12 +240,12 @@ function clearSessionCookie(req: express.Request): string {
 }
 
 // Auth middleware — /api/health and /api/auth/login are intentionally public.
-// Public share links are read-only HTML/MD (no mutating data).
+// Public share links are read-only HTML/MD (no mutating data) — /reports/share?id=xxx (single-segment routing).
 app.use('/api', async (req, res, next) => {
   if (
     req.path === '/health' ||
     req.path === '/auth/login' ||
-    (req.method === 'GET' && /^\/reports\/share\/[^/]+$/.test(req.path))
+    (req.method === 'GET' && (req.path === '/reports/share' || /^\/reports\/share\/[^/]+$/.test(req.path)))
   ) {
     return next()
   }
