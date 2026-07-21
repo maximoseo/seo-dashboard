@@ -13,6 +13,10 @@ export interface SeoReportInput {
   template?: ReportTemplateId
   clientName?: string | null
   market?: string | null
+  /** White-label: agency brand shown in the header/footer instead of generic title. */
+  brandName?: string | null
+  /** White-label: accent hex color for the brand header bar (e.g. '#0ea5e9'). */
+  brandColor?: string | null
   sections: ReportSection[]
 }
 
@@ -249,6 +253,8 @@ export function renderReportHtml(input: SeoReportInput): string {
   const locale = input.locale || 'en'
   const rtl = locale === 'he'
   const md = renderReportMarkdown(input)
+  const brandName = input.brandName?.trim() || null
+  const brandColor = /^#[0-9a-fA-F]{6}$/.test(input.brandColor || '') ? input.brandColor! : '#0ea5e9'
   const bodyHtml = md
     .split('\n')
     .map((line) => {
@@ -259,12 +265,22 @@ export function renderReportHtml(input: SeoReportInput): string {
     })
     .join('\n')
 
+  const brandHeader = brandName
+    ? `  <div class="brand-bar" style="background:${escapeHtml(brandColor)}">
+    <div class="brand-name">${escapeHtml(brandName)}</div>
+    <div class="brand-tag">${rtl ? 'דוח ביצועים' : 'Performance Report'}</div>
+  </div>`
+    : ''
+  const brandFooter = brandName
+    ? `  <div class="brand-footer">${rtl ? `הופק עבורך על ידי ${escapeHtml(brandName)}` : `Prepared for you by ${escapeHtml(brandName)}`}</div>`
+    : ''
+
   return `<!doctype html>
 <html lang="${rtl ? 'he' : 'en'}" dir="${rtl ? 'rtl' : 'ltr'}">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>${escapeHtml(input.domain)} — SEO Report</title>
+  <title>${escapeHtml(input.domain)} — SEO Report${brandName ? ` · ${escapeHtml(brandName)}` : ''}</title>
   <style>
     @page { margin: 1cm; }
     body {
@@ -281,12 +297,18 @@ export function renderReportHtml(input: SeoReportInput): string {
     p { margin: 0 0 6px; }
     .meta { color: #555; font-size: 9.5pt; margin-bottom: 14px; }
     .print-hint { color: #777; font-size: 9pt; margin-top: 24px; }
+    .brand-bar { display: flex; justify-content: space-between; align-items: center; padding: 10px 16px; border-radius: 8px; margin: -4px -6px 16px; color: #fff; }
+    .brand-name { font-size: 14pt; font-weight: 700; letter-spacing: 0.2px; }
+    .brand-tag { font-size: 9pt; opacity: 0.85; }
+    .brand-footer { margin-top: 28px; padding-top: 10px; border-top: 2px solid ${escapeHtml(brandColor)}; color: #555; font-size: 9.5pt; }
     @media print { .print-hint { display: none; } }
   </style>
 </head>
 <body>
+${brandHeader}
   ${bodyHtml}
   <p class="print-hint">${rtl ? 'להדפסה / PDF: Ctrl/Cmd+P → Save as PDF' : 'Print / PDF: Ctrl/Cmd+P → Save as PDF'}</p>
+${brandFooter}
 </body>
 </html>`
 }

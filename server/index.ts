@@ -19,6 +19,8 @@ import {
   type ReportLocale,
   type ReportTemplateId,
 } from './reports/renderReport.js'
+import { ReportScheduleStore, computeNextRunAt, normalizeSchedule, SCHEDULES_PROVIDER } from './reports/scheduleStore.js'
+import { buildScheduledReport, sendReportEmail } from './reports/sendScheduledReport.js'
 import {
   buildGeoAiOverview,
   buildLocalSeoOverview,
@@ -253,7 +255,7 @@ app.use('/api', async (req, res, next) => {
     CRON_SECRET &&
     bearer &&
     safeCompare(bearer, CRON_SECRET) &&
-    (req.path === '/cron/nightly-sync' || req.path === '/cron/health')
+    (req.path === '/cron/nightly-sync' || req.path === '/cron/health' || req.path === '/cron/report-schedules')
   ) {
     ;(req as any).user = { id: 'cron', email: 'cron@local', app_metadata: { provider: 'cron' } }
     return next()
@@ -4195,7 +4197,8 @@ app.get('/api/cron/nightly-sync', expensiveLimiter, async (req, res) => {
   try {
     const limit = Number((req.query as any).limit || 20)
     const payload = await runNightlySync({ limit, createTasks: true, sendDigest: true })
-    res.json(payload)
+    const scheduledReports = await runScheduledReports().catch((err: any) => ({ error: err?.message || String(err) }))
+    res.json({ ...payload, scheduledReports })
   } catch (err: any) {
     res.status(500).json({ error: err?.message || String(err) })
   }
@@ -4209,7 +4212,8 @@ app.post('/api/cron/nightly-sync', expensiveLimiter, async (req, res) => {
       createTasks: body.createTasks !== false,
       sendDigest: body.sendDigest !== false,
     })
-    res.json(payload)
+    const scheduledReports = await runScheduledReports().catch((err: any) => ({ error: err?.message || String(err) }))
+    res.json({ ...payload, scheduledReports })
   } catch (err: any) {
     res.status(500).json({ error: err?.message || String(err) })
   }
@@ -4792,6 +4796,176 @@ app.get('/api/reports/share/:id', (req, res) => {
     })
   }
   return res.type('text/html; charset=utf-8').send(rec.html)
+})
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// White-label scheduled reports — CRUD + send-now + cron
+// ═══════════════════════════════════════════════════════════════════════════════
+
+const scheduleSchema = z.object({
+  template: z.enum(['weekly', 'monthly', 'executive', 'local-geo']).optional(),
+  locale: z.enum(['he', 'en']).optional(),
+  frequency: z.enum(['weekly', 'monthly']).optional(),
+  recipients: z.array(z.string().email()).max(20).optional(),
+  brandName: z.string().max(120).optional().nullable(),
+  brandColor: z.string().regex(/^#[0-9a-fA-F]{6}$/).optional().nullable(),
+  clientName: z.string().max(120).optional().nullable(),
+  market: z.string().max(80).optional().nullable(),
+  enabled: z.boolean().optional(),
+  sendDay: z.number().int().min(0).max(28).optional(),
+  sendHour: z.number().int().min(0).max(23).optional(),
+})
+
+function scheduleStore(): ReportScheduleStore {
+  if (!supabaseAdmin) throw new Error('SUPABASE_SERVICE_ROLE not configured')
+  return new ReportScheduleStore(supabaseAdmin)
+}
+
+function scheduleOut(domainId: string, s: ReturnType<typeof normalizeSchedule>) {
+  return { ...s, domainId }
+}
+
+app.get('/api/reports/schedules', async (req, res) => {
+  const { domain } = req.query as Record<string, string>
+  if (!domain?.trim()) return res.status(400).json({ error: 'domain required' })
+  const clean = canonicalizeDomain(domain)
+  try {
+    const domainId = await findDomainId(clean)
+    if (!domainId) return res.json({ schedules: [], domain: clean })
+    const store = scheduleStore()
+    const rows = await store.list(domainId)
+    res.json({
+      domain: clean,
+      schedules: rows.map(({ schedule }) => scheduleOut(domainId, schedule)),
+    })
+  } catch (err: any) {
+    res.status(500).json({ error: err?.message || String(err) })
+  }
+})
+
+app.post('/api/reports/schedules', validateBody(scheduleSchema.extend({ domain: domainSchema })), async (req, res) => {
+  const body = (req as any).validatedBody as z.infer<typeof scheduleSchema> & { domain: string }
+  const clean = canonicalizeDomain(body.domain)
+  try {
+    const domainId = await findDomainId(clean)
+    if (!domainId) return res.status(404).json({ error: 'Domain not tracked — add it as a project first' })
+    const store = scheduleStore()
+    const schedule = await store.create(domainId, body)
+    res.status(201).json({ schedule: scheduleOut(domainId, schedule) })
+  } catch (err: any) {
+    res.status(500).json({ error: err?.message || String(err) })
+  }
+})
+
+app.patch('/api/reports/schedules/:id', validateBody(scheduleSchema.extend({ domain: domainSchema })), async (req, res) => {
+  const body = (req as any).validatedBody as z.infer<typeof scheduleSchema> & { domain: string }
+  const clean = canonicalizeDomain(body.domain)
+  try {
+    const domainId = await findDomainId(clean)
+    if (!domainId) return res.status(404).json({ error: 'Domain not found' })
+    const store = scheduleStore()
+    const updated = await store.update(domainId, String(req.params.id), body)
+    if (!updated) return res.status(404).json({ error: 'Schedule not found' })
+    res.json({ schedule: scheduleOut(domainId, updated) })
+  } catch (err: any) {
+    res.status(500).json({ error: err?.message || String(err) })
+  }
+})
+
+app.delete('/api/reports/schedules/:id', async (req, res) => {
+  const { domain } = req.query as Record<string, string>
+  if (!domain?.trim()) return res.status(400).json({ error: 'domain required' })
+  const clean = canonicalizeDomain(domain)
+  try {
+    const domainId = await findDomainId(clean)
+    if (!domainId) return res.status(404).json({ error: 'Domain not found' })
+    const store = scheduleStore()
+    const removed = await store.remove(domainId, String(req.params.id))
+    if (!removed) return res.status(404).json({ error: 'Schedule not found' })
+    res.json({ ok: true })
+  } catch (err: any) {
+    res.status(500).json({ error: err?.message || String(err) })
+  }
+})
+
+/** Send a schedule's report immediately (test/preview delivery). */
+app.post('/api/reports/schedules/:id/send-now', expensiveLimiter, validateBody(z.object({ domain: domainSchema })), async (req, res) => {
+  const body = (req as any).validatedBody as { domain: string }
+  const clean = canonicalizeDomain(body.domain)
+  try {
+    const domainId = await findDomainId(clean)
+    if (!domainId) return res.status(404).json({ error: 'Domain not found' })
+    const store = scheduleStore()
+    const rows = await store.list(domainId)
+    const row = rows.find((r) => r.schedule.id === String(req.params.id))
+    if (!row) return res.status(404).json({ error: 'Schedule not found' })
+
+    const pack = marketFromRequest(req, clean)
+    const built = buildScheduledReport({ domain: clean, schedule: row.schedule, marketLabel: pack.label })
+    const result = await sendReportEmail({
+      schedule: row.schedule,
+      html: built.html,
+      markdown: built.markdown,
+      subject: built.subject,
+      apiKey: process.env.RESEND_API_KEY || '',
+    })
+    await store.markRun(domainId, row.schedule.id, { ok: result.ok, error: result.error })
+    res.status(result.ok ? 200 : 502).json({
+      ...result,
+      subject: built.subject,
+      recipients: row.schedule.recipients,
+      preview: result.ok ? undefined : { html: built.html.slice(0, 400) },
+    })
+  } catch (err: any) {
+    res.status(500).json({ error: err?.message || String(err) })
+  }
+})
+
+/** Cron: send all due scheduled reports. Called by Vercel cron (and piggybacked from nightly-sync). */
+async function runScheduledReports(now = new Date()) {
+  if (!supabaseAdmin) throw new Error('SUPABASE_SERVICE_ROLE not configured')
+  const store = scheduleStore()
+  const dueRows = await store.due(now)
+  const results: Array<{ domainId: string; scheduleId: string; ok: boolean; error?: string | null }> = []
+  for (const { domainId, schedule } of dueRows.slice(0, 25)) {
+    try {
+      const { data: domainRow } = await supabaseAdmin.from('seo_domains').select('domain, market').eq('id', domainId).maybeSingle()
+      const domain = canonicalizeDomain(String(domainRow?.domain || ''))
+      if (!domain) {
+        results.push({ domainId, scheduleId: schedule.id, ok: false, error: 'domain row missing' })
+        continue
+      }
+      const built = buildScheduledReport({ domain, schedule, marketLabel: domainRow?.market || null })
+      const result = await sendReportEmail({
+        schedule,
+        html: built.html,
+        markdown: built.markdown,
+        subject: built.subject,
+        apiKey: process.env.RESEND_API_KEY || '',
+      })
+      await store.markRun(domainId, schedule.id, { ok: result.ok, error: result.error })
+      results.push({ domainId, scheduleId: schedule.id, ok: result.ok, error: result.error })
+    } catch (err: any) {
+      results.push({ domainId, scheduleId: schedule.id, ok: false, error: err?.message || String(err) })
+    }
+  }
+  return { due: dueRows.length, sent: results.filter((r) => r.ok).length, results, ranAt: now.toISOString() }
+}
+
+app.get('/api/cron/report-schedules', expensiveLimiter, async (_req, res) => {
+  try {
+    res.json(await runScheduledReports())
+  } catch (err: any) {
+    res.status(500).json({ error: err?.message || String(err) })
+  }
+})
+
+app.post('/api/cron/report-schedules', expensiveLimiter, async (_req, res) => {
+  try {
+    res.json(await runScheduledReports())
+  } catch (err: any) {
+    res.status(500).json({ error: err?.message || String(err) })
+  }
 })
 
 app.get('/api/local-seo/overview', async (req, res) => {

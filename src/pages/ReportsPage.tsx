@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { DataCard } from '@/components/DataCard'
 import DataStateBadge from '@/components/DataStateBadge'
 import DomainIntegrityBar from '@/components/DomainIntegrityBar'
+import ReportSchedules from '@/components/ReportSchedules'
 import { useSEO } from '@/contexts/SEOContext'
 import { useProject } from '@/contexts/ProjectContext'
 import { authFetch } from '@/lib/authToken'
@@ -340,6 +341,8 @@ export default function ReportsPage() {
           </pre>
         )}
       </DataCard>
+
+      {clean && <ReportSchedules domain={clean} clientName={activeProject?.name || null} market={projectMarket} />}
     </div>
   )
 }
