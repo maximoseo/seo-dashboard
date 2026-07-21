@@ -19,7 +19,7 @@ import {
   type ReportLocale,
   type ReportTemplateId,
 } from './reports/renderReport.js'
-import { ReportScheduleStore, computeNextRunAt, normalizeSchedule, SCHEDULES_PROVIDER } from './reports/scheduleStore.js'
+import { ReportScheduleStore, ReportShareStore, computeNextRunAt, normalizeSchedule, SCHEDULES_PROVIDER } from './reports/scheduleStore.js'
 import { buildScheduledReport, sendReportEmail } from './reports/sendScheduledReport.js'
 import {
   buildGeoAiOverview,
@@ -4646,26 +4646,8 @@ app.post('/api/bridges/asana', expensiveLimiter, async (req, res) => {
   res.status(result.ok ? 200 : result.skipped ? 202 : 502).json(result)
 })
 
-// In-memory share tokens (prod can move to Supabase later). TTL 7 days.
-type ShareRecord = {
-  id: string
-  domain: string
-  locale: ReportLocale
-  template: ReportTemplateId
-  markdown: string
-  html: string
-  createdAt: string
-  expiresAt: string
-}
-const reportShares = new Map<string, ShareRecord>()
+// Share links are persisted in seo_snapshots via ReportShareStore (serverless-safe). TTL 7 days.
 const SHARE_TTL_MS = 7 * 24 * 60 * 60 * 1000
-
-function pruneExpiredShares() {
-  const now = Date.now()
-  for (const [id, rec] of reportShares) {
-    if (Date.parse(rec.expiresAt) < now) reportShares.delete(id)
-  }
-}
 
 function buildReportPayload(body: {
   domain: string
@@ -4760,13 +4742,18 @@ app.post(
     }),
   ),
   (req, res) => {
-    pruneExpiredShares()
+    void (async () => {
+    try {
     const body = (req as any).validatedBody
     const built = buildReportPayload(body)
     const id = `shr_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`
     const createdAt = new Date().toISOString()
     const expiresAt = new Date(Date.now() + SHARE_TTL_MS).toISOString()
-    reportShares.set(id, {
+    const domainId = await findDomainId(built.input.domain)
+    if (!domainId) return res.status(404).json({ error: 'Domain not tracked — add it as a project first' })
+    if (!supabaseAdmin) return res.status(503).json({ error: 'SUPABASE_SERVICE_ROLE not configured' })
+    const store = new ReportShareStore(supabaseAdmin)
+    await store.create(domainId, {
       id,
       domain: built.input.domain,
       locale: built.input.locale || 'he',
@@ -4788,33 +4775,38 @@ app.post(
       locale: built.input.locale,
       template: built.input.template,
     })
+    } catch (err: any) {
+      res.status(500).json({ error: err?.message || String(err) })
+    }
+    })()
   },
 )
 
-app.get('/api/reports/share', (req, res) => {
-  pruneExpiredShares()
-  const rec = reportShares.get(String((req.query as any).id || ''))
-  if (!rec) return res.status(404).json({ error: 'Share link not found or expired' })
-  if (Date.parse(rec.expiresAt) < Date.now()) {
-    reportShares.delete(rec.id)
-    return res.status(410).json({ error: 'Share link expired' })
+app.get('/api/reports/share', async (req, res) => {
+  try {
+    if (!supabaseAdmin) return res.status(503).json({ error: 'SUPABASE_SERVICE_ROLE not configured' })
+    const store = new ReportShareStore(supabaseAdmin)
+    const rec = await store.get(String((req.query as any).id || ''))
+    if (!rec) return res.status(404).json({ error: 'Share link not found or expired' })
+    const format = String((req.query as any).format || 'html').toLowerCase()
+    if (format === 'md' || format === 'markdown') {
+      return res.type('text/markdown; charset=utf-8').send(rec.markdown)
+    }
+    if (format === 'json') {
+      return res.json({
+        id: rec.id,
+        domain: rec.domain,
+        locale: rec.locale,
+        template: rec.template,
+        createdAt: rec.createdAt,
+        expiresAt: rec.expiresAt,
+        markdown: rec.markdown,
+      })
+    }
+    return res.type('text/html; charset=utf-8').send(rec.html)
+  } catch (err: any) {
+    res.status(500).json({ error: err?.message || String(err) })
   }
-  const format = String((req.query as any).format || 'html').toLowerCase()
-  if (format === 'md' || format === 'markdown') {
-    return res.type('text/markdown; charset=utf-8').send(rec.markdown)
-  }
-  if (format === 'json') {
-    return res.json({
-      id: rec.id,
-      domain: rec.domain,
-      locale: rec.locale,
-      template: rec.template,
-      createdAt: rec.createdAt,
-      expiresAt: rec.expiresAt,
-      markdown: rec.markdown,
-    })
-  }
-  return res.type('text/html; charset=utf-8').send(rec.html)
 })
 
 // ═══════════════════════════════════════════════════════════════════════════════

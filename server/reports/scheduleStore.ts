@@ -202,3 +202,88 @@ export class ReportScheduleStore {
     return all.filter(({ schedule }) => schedule.enabled && schedule.nextRunAt && Date.parse(schedule.nextRunAt) <= t)
   }
 }
+
+/* ─────────────────────────────────────────────────────────────────────────────
+ * Report share links — persisted in seo_snapshots (provider='report_share').
+ * In-memory Map dies between serverless cold starts/deployments, so shares live
+ * as arrays inside per-domain daily docs. Lookup by id scans the (small) set.
+ * ─────────────────────────────────────────────────────────────────────────── */
+
+export const SHARES_PROVIDER = 'report_share'
+
+export interface ShareRecord {
+  id: string
+  domain: string
+  locale: 'he' | 'en'
+  template: string
+  markdown: string
+  html: string
+  createdAt: string
+  expiresAt: string
+}
+
+interface SharesDoc {
+  shares: ShareRecord[]
+}
+
+export class ReportShareStore {
+  constructor(private supabase: SupabaseClient) {}
+
+  private today(): string {
+    return new Date().toISOString().split('T')[0]
+  }
+
+  private isExpired(rec: ShareRecord): boolean {
+    return Date.parse(rec.expiresAt) < Date.now()
+  }
+
+  async create(domainId: string, record: ShareRecord): Promise<void> {
+    const date = this.today()
+    const { data, error } = await this.supabase
+      .from('seo_snapshots')
+      .select('data')
+      .eq('domain_id', domainId)
+      .eq('provider', SHARES_PROVIDER)
+      .eq('snapshot_date', date)
+      .maybeSingle()
+    if (error) throw new Error(`read shares doc: ${error.message}`)
+    const doc = (data?.data as SharesDoc) || { shares: [] }
+    doc.shares = (doc.shares || []).filter((s) => s.id !== record.id && !this.isExpired(s))
+    doc.shares.push(record)
+    // Cap per-day shares to avoid unbounded docs
+    doc.shares = doc.shares.slice(-50)
+    const { error: upErr } = await this.supabase
+      .from('seo_snapshots')
+      .upsert(
+        {
+          domain_id: domainId,
+          provider: SHARES_PROVIDER,
+          snapshot_date: date,
+          data: doc,
+          fetched_at: new Date().toISOString(),
+        },
+        { onConflict: 'domain_id,provider,snapshot_date' },
+      )
+    if (upErr) throw new Error(`write shares doc: ${upErr.message}`)
+  }
+
+  async get(id: string): Promise<ShareRecord | null> {
+    // Scan recent share docs (30 days) — provider rows are few
+    const since = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0]
+    const { data, error } = await this.supabase
+      .from('seo_snapshots')
+      .select('data')
+      .eq('provider', SHARES_PROVIDER)
+      .gte('snapshot_date', since)
+    if (error) throw new Error(`scan shares: ${error.message}`)
+    for (const row of data || []) {
+      const doc = row.data as SharesDoc
+      const rec = (doc?.shares || []).find((s) => s.id === id)
+      if (rec) {
+        if (this.isExpired(rec)) return null
+        return rec
+      }
+    }
+    return null
+  }
+}
