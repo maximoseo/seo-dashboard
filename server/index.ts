@@ -1522,7 +1522,12 @@ app.get('/api/keywords/aggregated', expensiveLimiter, async (req, res) => {
         const kwIntegrity = filterKeywordsForDomain(snap.normalized, domain)
         snap.normalized = kwIntegrity.rows
         snap.movements = snap.movements || keywordMovements(kwIntegrity.rows)
-        snap.intel = computeKeywordIntel(kwIntegrity.rows)
+        const recomputedIntel = computeKeywordIntel(kwIntegrity.rows)
+        // Preserve the live-path cannibalization (computed from pre-merge source rows) — merged rows collapse URLs
+        if (Array.isArray((snap as any).intel?.cannibalization) && (snap as any).intel.cannibalization.length) {
+          recomputedIntel.cannibalization = (snap as any).intel.cannibalization
+        }
+        snap.intel = recomputedIntel
         snap.serpFeatureStats = snap.serpFeatureStats || computeSerpFeatureStats(kwIntegrity.rows)
         return res.json(stampPayload(snap, domain, { foreignRowsDropped: kwIntegrity.foreignRowsDropped }))
       }
