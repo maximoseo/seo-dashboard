@@ -126,10 +126,10 @@ export default function ReportSchedules({ domain, clientName, market }: Props) {
   const toggleEnabled = async (s: Schedule) => {
     setError(null)
     try {
-      const res = await authFetch(`/api/reports/schedules/${s.id}`, {
-        method: 'PATCH',
+      const res = await authFetch('/api/reports/schedules-update', {
+        method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ domain, enabled: !s.enabled }),
+        body: JSON.stringify({ domain, id: s.id, enabled: !s.enabled }),
       })
       if (!res.ok) throw new Error(`Update failed (${res.status})`)
       await load()
@@ -142,7 +142,11 @@ export default function ReportSchedules({ domain, clientName, market }: Props) {
     if (!window.confirm(`Delete schedule for ${s.recipients.join(', ')}?`)) return
     setError(null)
     try {
-      const res = await authFetch(`/api/reports/schedules/${s.id}?domain=${encodeURIComponent(domain)}`, { method: 'DELETE' })
+      const res = await authFetch('/api/reports/schedules-delete', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ domain, id: s.id }),
+      })
       if (!res.ok) throw new Error(`Delete failed (${res.status})`)
       await load()
     } catch (e) {
@@ -155,10 +159,10 @@ export default function ReportSchedules({ domain, clientName, market }: Props) {
     setError(null)
     setNotice(null)
     try {
-      const res = await authFetch(`/api/reports/schedules/${s.id}/send-now`, {
+      const res = await authFetch('/api/reports/schedules-send', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ domain }),
+        body: JSON.stringify({ domain, id: s.id }),
       })
       const body = await res.json().catch(() => ({}))
       if (!res.ok) throw new Error(body.error || `Send failed (${res.status})`)

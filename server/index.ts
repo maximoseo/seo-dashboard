@@ -4774,9 +4774,9 @@ app.post(
       id,
       createdAt,
       expiresAt,
-      path: `/api/reports/share/${id}`,
-      htmlUrl: `${base}/api/reports/share/${id}?format=html`,
-      markdownUrl: `${base}/api/reports/share/${id}?format=md`,
+      path: `/api/reports/share?id=${id}`,
+      htmlUrl: `${base}/api/reports/share?id=${id}&format=html`,
+      markdownUrl: `${base}/api/reports/share?id=${id}&format=md`,
       domain: built.input.domain,
       locale: built.input.locale,
       template: built.input.template,
@@ -4784,9 +4784,9 @@ app.post(
   },
 )
 
-app.get('/api/reports/share/:id', (req, res) => {
+app.get('/api/reports/share', (req, res) => {
   pruneExpiredShares()
-  const rec = reportShares.get(String(req.params.id || ''))
+  const rec = reportShares.get(String((req.query as any).id || ''))
   if (!rec) return res.status(404).json({ error: 'Share link not found or expired' })
   if (Date.parse(rec.expiresAt) < Date.now()) {
     reportShares.delete(rec.id)
@@ -4869,14 +4869,15 @@ app.post('/api/reports/schedules', validateBody(scheduleSchema.extend({ domain: 
   }
 })
 
-app.patch('/api/reports/schedules/:id', validateBody(scheduleSchema.extend({ domain: domainSchema })), async (req, res) => {
-  const body = (req as any).validatedBody as z.infer<typeof scheduleSchema> & { domain: string }
+/** Vercel FS routing in this project only matches single-segment paths, so updates are via dedicated one-segment endpoints. */
+app.post('/api/reports/schedules-update', validateBody(scheduleSchema.extend({ domain: domainSchema, id: z.string().min(1) })), async (req, res) => {
+  const body = (req as any).validatedBody as z.infer<typeof scheduleSchema> & { domain: string; id: string }
   const clean = canonicalizeDomain(body.domain)
   try {
     const domainId = await findDomainId(clean)
     if (!domainId) return res.status(404).json({ error: 'Domain not found' })
     const store = scheduleStore()
-    const updated = await store.update(domainId, String(req.params.id), body)
+    const updated = await store.update(domainId, body.id, body)
     if (!updated) return res.status(404).json({ error: 'Schedule not found' })
     res.json({ schedule: scheduleOut(domainId, updated) })
   } catch (err: any) {
@@ -4884,15 +4885,14 @@ app.patch('/api/reports/schedules/:id', validateBody(scheduleSchema.extend({ dom
   }
 })
 
-app.delete('/api/reports/schedules/:id', async (req, res) => {
-  const { domain } = req.query as Record<string, string>
-  if (!domain?.trim()) return res.status(400).json({ error: 'domain required' })
-  const clean = canonicalizeDomain(domain)
+app.post('/api/reports/schedules-delete', validateBody(z.object({ domain: domainSchema, id: z.string().min(1) })), async (req, res) => {
+  const body = (req as any).validatedBody as { domain: string; id: string }
+  const clean = canonicalizeDomain(body.domain)
   try {
     const domainId = await findDomainId(clean)
     if (!domainId) return res.status(404).json({ error: 'Domain not found' })
     const store = scheduleStore()
-    const removed = await store.remove(domainId, String(req.params.id))
+    const removed = await store.remove(domainId, body.id)
     if (!removed) return res.status(404).json({ error: 'Schedule not found' })
     res.json({ ok: true })
   } catch (err: any) {
@@ -4901,15 +4901,15 @@ app.delete('/api/reports/schedules/:id', async (req, res) => {
 })
 
 /** Send a schedule's report immediately (test/preview delivery). */
-app.post('/api/reports/schedules/:id/send-now', expensiveLimiter, validateBody(z.object({ domain: domainSchema })), async (req, res) => {
-  const body = (req as any).validatedBody as { domain: string }
+app.post('/api/reports/schedules-send', expensiveLimiter, validateBody(z.object({ domain: domainSchema, id: z.string().min(1) })), async (req, res) => {
+  const body = (req as any).validatedBody as { domain: string; id: string }
   const clean = canonicalizeDomain(body.domain)
   try {
     const domainId = await findDomainId(clean)
     if (!domainId) return res.status(404).json({ error: 'Domain not found' })
     const store = scheduleStore()
     const rows = await store.list(domainId)
-    const row = rows.find((r) => r.schedule.id === String(req.params.id))
+    const row = rows.find((r) => r.schedule.id === body.id)
     if (!row) return res.status(404).json({ error: 'Schedule not found' })
 
     const pack = marketFromRequest(req, clean)
