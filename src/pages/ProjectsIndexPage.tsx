@@ -610,7 +610,7 @@ function VirtualProjectList({
 
   const rows = useMemo<Row[]>(() => {
     const out: Row[] = []
-    let buffer: ProjectSummary[] = []
+    const buffer: ProjectSummary[] = []
     const flush = () => {
       while (buffer.length) out.push({ kind: 'projects', projects: buffer.splice(0, columns) })
     }
@@ -798,7 +798,7 @@ function ProjectCard({
           </div>
           <div className="hidden md:block w-20 text-right">
             <span className="text-xs text-fg-dim">Health</span>
-            <p className="text-sm font-medium text-fg">{project.healthScore ?? '\u2014'}</p>
+            <b className="text-base md:text-lg text-fg">{project.healthScore ?? '—'}</b>
           </div>
           <div className="hidden md:block w-16 text-right">
             <span className="text-xs text-fg-dim">Alerts</span>
@@ -857,7 +857,7 @@ function ProjectCard({
           <div className="min-w-0">
             <p className="truncate text-base font-semibold text-fg">{project.name}</p>
             <p className="mt-1 truncate text-sm text-fg-muted">{project.domain}</p>
-            <p className="mt-0.5 truncate text-xs text-fg-dim">{project.clientName} \u2022 {project.market}</p>
+            <p className="mt-0.5 truncate text-xs text-fg-dim">{project.clientName} • {project.market}</p>
           </div>
           <ProjectStatusBadge status={project.status} />
         </div>

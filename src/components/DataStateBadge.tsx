@@ -29,7 +29,7 @@ const stateLabels: Record<DataState, string> = {
 
 function resolveState(state?: DataState | string | null): DataState {
   if (state && state in stateStyles) return state as DataState
-  return 'unavailable'
+  return 'planned'
 }
 
 export default function DataStateBadge({ state, source, fetchedAt, className = '' }: DataStateBadgeProps) {

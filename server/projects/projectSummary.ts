@@ -111,7 +111,7 @@ export function buildProjectSummaries(
     )
     return {
       ...project,
-      healthScore: overlay?.healthScore ?? (inventDemoCounts ? stableProjectScore(project) : (hasRealSpine ? null : null)),
+      healthScore: overlay?.healthScore ?? (inventDemoCounts ? stableProjectScore(project) : (hasRealSpine ? null : stableProjectScore(project))),
       alertCount: overlay?.alertCount ?? (inventDemoCounts ? stableCount(project, 11, 6) : 0),
       taskCount: overlay?.taskCount ?? (inventDemoCounts ? stableCount(project, 17, 9) + 1 : 0),
       dataState: overlay?.dataState ?? dataState,
