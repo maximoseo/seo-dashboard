@@ -41,6 +41,7 @@ import {
   computeCompetitorGaps,
   computeKeywordIntel,
   computeLinkIntel,
+  computeShareOfVoice,
   competitorsFromDataForSEO,
   competitorsFromExa,
   competitorsFromSemrush,
@@ -3400,6 +3401,7 @@ app.get('/api/competitors/aggregated', expensiveLimiter, async (req, res) => {
   }
 
   result.keywordGap = buildKeywordGapMatrix(ourKeywords, competitorKeywordSets)
+  result.shareOfVoice = computeShareOfVoice(domain, ourKeywords, competitorKeywordSets)
   // Annotate gap estimate cards with real missing counts when available
   if (Array.isArray(result.gaps) && result.keywordGap?.rows?.length) {
     const missingByComp = new Map<string, number>()

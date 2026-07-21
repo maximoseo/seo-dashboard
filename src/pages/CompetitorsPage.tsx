@@ -160,6 +160,14 @@ export default function CompetitorsPage() {
   const softDegraded = Array.isArray(data?.softDegraded) ? data.softDegraded : []
   const marketLabel = data?.market?.label || data?.market || null
 
+  const sov = data?.shareOfVoice || null
+  const sovRows = useMemo(
+    () => (Array.isArray(sov?.rows) ? (sov.rows as any[]).filter((r: any) => (Number(r?.visibility) || 0) > 0 || r?.isOurs) : []),
+    [sov],
+  )
+  const maxSov = useMemo(() => sovRows.reduce((m: number, r: any) => Math.max(m, Number(r?.sov) || 0), 0), [sovRows])
+  const ourSovRow = sovRows.find((r: any) => r?.isOurs) || null
+
   const [search, setSearch] = useState('')
   const [sortKey, setSortKey] = useState<'traffic' | 'commonKeywords' | 'relevance'>('traffic')
 
@@ -231,6 +239,44 @@ export default function CompetitorsPage() {
           </motion.div>
         ))}
       </div>
+
+      {/* Share of Voice */}
+      {sovRows.length > 0 && (
+        <DataCard
+          title="Share of Voice (CTR-weighted visibility)"
+          dataState={dataState as any}
+          fetchedAt={data?.fetchedAt}
+          headerRight={
+            sov?.keywordsCompared ? (
+              <span className="text-[11px] text-fg-dim">
+                {sov.keywordsCompared} keywords · our SOV {ourSovRow ? `${Number(ourSovRow.sov).toFixed(1)}%` : '—'}
+              </span>
+            ) : null
+          }
+        >
+          <div className="space-y-2">
+            {sovRows.slice(0, 10).map((r: any) => {
+              const pct = maxSov > 0 ? Math.max(4, Math.round((Number(r.sov) / maxSov) * 100)) : 4
+              return (
+                <div key={r.domain} className="flex items-center gap-3">
+                  <div className="w-40 md:w-56 truncate text-sm font-medium text-fg shrink-0">
+                    {r.isOurs ? <span className="text-accent-light">{r.domain} (you)</span> : r.domain}
+                  </div>
+                  <div className="flex-1 h-2.5 rounded-full bg-bg-darkest border border-border overflow-hidden">
+                    <div
+                      className={`h-full rounded-full ${r.isOurs ? 'bg-accent' : 'bg-blue-500/70'}`}
+                      style={{ width: `${pct}%` }}
+                    />
+                  </div>
+                  <div className="w-14 text-right text-sm font-semibold text-fg shrink-0">{Number(r.sov).toFixed(1)}%</div>
+                  <div className="hidden md:block w-24 text-right text-[11px] text-fg-dim shrink-0">top3 {r.top3Count} · kw {r.keywordsWithVolume}</div>
+                </div>
+              )
+            })}
+            {sov?.note && <p className="text-[11px] text-fg-dim pt-1">{sov.note}{sov.keywordsSkippedNoVolume ? ` · ${sov.keywordsSkippedNoVolume} skipped (no volume)` : ''}</p>}
+          </div>
+        </DataCard>
+      )}
 
       {/* Source badges */}
       {(activeSources.length > 0 || softDegraded.length > 0 || marketLabel) && (

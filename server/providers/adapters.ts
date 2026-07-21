@@ -600,6 +600,174 @@ export function buildKeywordGapMatrix(
   }
 }
 
+/** Position → estimated organic CTR curve (blended industry estimates). */
+export function estimatedCtr(position: number | null | undefined): number {
+  if (position == null || !(position > 0)) return 0
+  const p = Math.round(position)
+  if (p === 1) return 0.3
+  if (p === 2) return 0.15
+  if (p === 3) return 0.09
+  if (p === 4) return 0.06
+  if (p === 5) return 0.045
+  if (p === 6) return 0.03
+  if (p === 7) return 0.022
+  if (p === 8) return 0.017
+  if (p === 9) return 0.013
+  if (p === 10) return 0.01
+  if (p <= 20) return 0.005
+  return 0.001
+}
+
+export type ShareOfVoiceRow = {
+  domain: string
+  visibility: number
+  sov: number
+  keywordsWithVolume: number
+  keywordsTotal: number
+  top3Count: number
+  isOurs: boolean
+}
+
+export type ShareOfVoiceResult = {
+  method: 'ctr-weighted'
+  ourSov: number | null
+  ourVisibility: number
+  totalVisibility: number
+  rows: ShareOfVoiceRow[]
+  keywordsCompared: number
+  keywordsSkippedNoVolume: number
+  note: string
+}
+
+/**
+ * Share-of-Voice: CTR-weighted visibility share across us + competitors.
+ * visibility(domain) = Σ volume(keyword) × CTR(position) over volume-backed keywords.
+ * sov(domain) = visibility(domain) / totalVisibility × 100.
+ */
+export function computeShareOfVoice(
+  ourDomain: string,
+  ourKeywords: KeywordRow[],
+  competitorKeywordSets: Array<{ competitor: string; keywords: KeywordRow[] }>,
+): ShareOfVoiceResult {
+  const volumeByKeyword = new Map<string, number>()
+  const seenNoVolume = new Set<string>()
+  const ourPos = new Map<string, number | null>()
+  const compPos = new Map<string, Map<string, number | null>>()
+
+  const trackVolume = (kw: string, vol: number | null): string => {
+    const key = kw.toLowerCase().trim()
+    if (!key) return ''
+    const v = Number(vol) || 0
+    if (v > 0) {
+      const prev = volumeByKeyword.get(key) || 0
+      if (v > prev) volumeByKeyword.set(key, v)
+    } else if (!volumeByKeyword.has(key)) {
+      seenNoVolume.add(key)
+    }
+    return key
+  }
+
+  const bestPos = (m: Map<string, number | null>, key: string, pos: number | null) => {
+    const prev = m.get(key)
+    if (prev === undefined || (pos != null && (prev == null || pos < prev))) m.set(key, pos)
+  }
+
+  for (const row of ourKeywords || []) {
+    const key = trackVolume(String(row.keyword || ''), row.volume)
+    if (!key) continue
+    const pos = row.position != null && Number(row.position) > 0 ? Number(row.position) : null
+    bestPos(ourPos, key, pos)
+  }
+
+  for (const set of competitorKeywordSets || []) {
+    const competitor = canonicalizeLike(set.competitor)
+    if (!competitor) continue
+    let m = compPos.get(competitor)
+    if (!m) {
+      m = new Map()
+      compPos.set(competitor, m)
+    }
+    for (const ck of set.keywords || []) {
+      const key = trackVolume(String(ck.keyword || ''), ck.volume)
+      if (!key) continue
+      const pos = ck.position != null && Number(ck.position) > 0 ? Number(ck.position) : null
+      bestPos(m, key, pos)
+    }
+  }
+
+  // Compare only keywords with a volume estimate.
+  const compared = [...volumeByKeyword.keys()]
+  const keywordsSkippedNoVolume = [...seenNoVolume].filter((k) => !volumeByKeyword.has(k)).length
+
+  const top3Of = (posMap: Map<string, number | null>): number => {
+    let n = 0
+    for (const [, pos] of posMap) if (pos != null && pos <= 3) n += 1
+    return n
+  }
+
+  const visibilityOf = (posMap: Map<string, number | null>): number => {
+    let v = 0
+    for (const key of compared) {
+      const ctr = estimatedCtr(posMap.get(key))
+      if (ctr > 0) v += (volumeByKeyword.get(key) || 0) * ctr
+    }
+    return Math.round(v)
+  }
+
+  const withVolumeCount = (posMap: Map<string, number | null>): number => {
+    let n = 0
+    for (const key of posMap.keys()) if (volumeByKeyword.has(key)) n += 1
+    return n
+  }
+
+  const ourVisibility = visibilityOf(ourPos)
+  let totalVisibility = ourVisibility
+
+  const rows: ShareOfVoiceRow[] = []
+  for (const [domain, m] of compPos.entries()) {
+    const visibility = visibilityOf(m)
+    totalVisibility += visibility
+    rows.push({
+      domain,
+      visibility,
+      sov: 0,
+      keywordsWithVolume: withVolumeCount(m),
+      keywordsTotal: m.size,
+      top3Count: top3Of(m),
+      isOurs: false,
+    })
+  }
+  rows.push({
+    domain: canonicalizeLike(ourDomain) || 'you',
+    visibility: ourVisibility,
+    sov: 0,
+    keywordsWithVolume: withVolumeCount(ourPos),
+    keywordsTotal: ourPos.size,
+    top3Count: top3Of(ourPos),
+    isOurs: true,
+  })
+
+  for (const row of rows) {
+    row.sov = totalVisibility > 0 ? Math.round((row.visibility / totalVisibility) * 1000) / 10 : 0
+  }
+  rows.sort((a, b) => b.visibility - a.visibility || b.top3Count - a.top3Count)
+
+  const ourSov = totalVisibility > 0 ? Math.round((ourVisibility / totalVisibility) * 1000) / 10 : null
+
+  return {
+    method: 'ctr-weighted',
+    ourSov,
+    ourVisibility,
+    totalVisibility,
+    rows,
+    keywordsCompared: compared.length,
+    keywordsSkippedNoVolume,
+    note: compared.length
+      ? `CTR-weighted visibility across ${compared.length} volume-backed keywords (positions from tracked sets).`
+      : 'No volume-backed keywords yet — refresh keywords to compute Share-of-Voice.',
+  }
+}
+
 function canonicalizeLike(input?: string | null): string {
   if (!input) return ''
   return String(input)
