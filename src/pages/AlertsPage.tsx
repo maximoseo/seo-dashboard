@@ -48,6 +48,43 @@ async function fetchAlerts(domain: string): Promise<{ alerts: ApiAlert[]; source
   return res.json()
 }
 
+interface MetricAnomaly {
+  kind: 'metric'
+  metric: string
+  label: string
+  current: number
+  baseline: number
+  deltaPct: number
+  zScore: number | null
+  direction: 'drop' | 'spike'
+  severity: Severity
+  points: number
+}
+interface KeywordDrop {
+  kind: 'keyword-drop'
+  keyword: string
+  fromPosition: number | null
+  toPosition: number | null
+  drop: number
+  volume: number | null
+  outOf: 'top3' | 'top10' | null
+  severity: Severity
+}
+interface AnomaliesResponse {
+  metricAnomalies?: MetricAnomaly[]
+  keywordDrops?: KeywordDrop[]
+  keywordsGained?: KeywordDrop[]
+  keywordsCompared?: number
+  snapshotsUsed?: number
+  note?: string
+  dataState?: string
+}
+async function fetchAnomalies(domain: string): Promise<AnomaliesResponse> {
+  const res = await authFetch(`/api/anomalies/aggregated?domain=${encodeURIComponent(domain)}`)
+  if (!res.ok) throw new Error(`Anomalies API failed: ${res.status}`)
+  return res.json()
+}
+
 function normalizeAlert(raw: ApiAlert, index: number): Alert {
   const ts = typeof raw.timestamp === 'number'
     ? raw.timestamp
@@ -97,6 +134,18 @@ export default function AlertsPage() {
     staleTime: 2 * 60 * 1000,
     retry: 1,
   })
+
+  const { data: anomaliesData, isLoading: anomaliesLoading } = useQuery({
+    queryKey: ['anomalies', clean],
+    queryFn: () => fetchAnomalies(clean),
+    enabled: !!clean,
+    staleTime: 10 * 60 * 1000,
+    retry: 1,
+  })
+  const metricAnomalies = useMemo(() => (Array.isArray(anomaliesData?.metricAnomalies) ? anomaliesData.metricAnomalies : []), [anomaliesData])
+  const keywordDrops = useMemo(() => (Array.isArray(anomaliesData?.keywordDrops) ? anomaliesData.keywordDrops : []), [anomaliesData])
+  const keywordsGained = useMemo(() => (Array.isArray(anomaliesData?.keywordsGained) ? anomaliesData.keywordsGained : []), [anomaliesData])
+  const hasAnomalies = metricAnomalies.length > 0 || keywordDrops.length > 0 || keywordsGained.length > 0
 
   const alerts: Alert[] = useMemo(() => {
     if (data?.alerts?.length) return data.alerts.map(normalizeAlert)
@@ -184,6 +233,85 @@ export default function AlertsPage() {
           </motion.div>
         ))}
       </div>
+
+      {/* Anomaly detection — statistical (MAD z-score) on snapshot history */}
+      {(anomaliesLoading || hasAnomalies) && (
+        <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.4, delay: 0.15 }} className="bg-bg-card border border-border rounded-xl p-3.5 md:p-4 card-glow">
+          <div className="flex items-center justify-between gap-2 mb-3">
+            <div>
+              <h3 className="text-sm md:text-base font-semibold text-fg">Anomaly detection</h3>
+              <p className="text-[11px] text-fg-dim mt-0.5">
+                {anomaliesData?.note || 'Statistical anomalies vs trailing snapshot baseline.'}
+                {anomaliesData?.snapshotsUsed ? ` · ${anomaliesData.snapshotsUsed} snapshots` : ''}
+              </p>
+            </div>
+            {metricAnomalies.length > 0 && (
+              <span className="text-[10px] md:text-xs bg-red/15 text-red border border-red/30 px-2 py-0.5 rounded shrink-0">
+                {metricAnomalies.length} metric {metricAnomalies.length === 1 ? 'anomaly' : 'anomalies'}
+              </span>
+            )}
+          </div>
+
+          {anomaliesLoading && <div className="animate-pulse space-y-2">{[1, 2].map(i => <div key={i} className="h-12 bg-white/[0.06] rounded-xl" />)}</div>}
+
+          {metricAnomalies.length > 0 && (
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-2.5 mb-3">
+              {metricAnomalies.map((a) => {
+                const cfg = severityConfig[a.severity] || severityConfig.info
+                return (
+                  <div key={a.metric} className="rounded-xl border border-border bg-bg-darkest px-3 py-2.5">
+                    <div className="flex items-center justify-between gap-2">
+                      <p className="text-[11px] font-semibold uppercase tracking-wider text-fg-muted">{a.label}</p>
+                      <span className={`text-[10px] px-1.5 py-0.5 rounded ${cfg.bg} ${cfg.text}`}>{a.severity}</span>
+                    </div>
+                    <div className="mt-1.5 flex items-baseline gap-2">
+                      <p className={`text-lg font-bold ${a.direction === 'drop' ? 'text-red' : 'text-green'}`}>
+                        {a.direction === 'drop' ? '▼' : '▲'} {a.current.toLocaleString()}
+                      </p>
+                      <p className="text-[11px] text-fg-dim">baseline {a.baseline.toLocaleString()}</p>
+                    </div>
+                    <p className="text-[11px] text-fg-dim mt-0.5">
+                      {a.deltaPct > 0 ? '+' : ''}{a.deltaPct}% vs median{a.zScore != null ? ` · z=${a.zScore}` : ''} · {a.points} pts
+                    </p>
+                  </div>
+                )
+              })}
+            </div>
+          )}
+
+          {keywordDrops.length > 0 && (
+            <div className="space-y-1.5">
+              <p className="text-[11px] font-semibold uppercase tracking-wider text-fg-muted">Keyword drops ({keywordDrops.length})</p>
+              {keywordDrops.slice(0, 8).map((d) => {
+                const cfg = severityConfig[d.severity] || severityConfig.info
+                return (
+                  <div key={d.keyword} className="flex items-center justify-between gap-3 rounded-lg border border-border bg-bg-darkest px-3 py-2">
+                    <div className="min-w-0 flex items-center gap-2">
+                      <span className={`text-[10px] px-1.5 py-0.5 rounded shrink-0 ${cfg.bg} ${cfg.text}`}>{d.outOf ? `out of ${d.outOf}` : `−${d.drop}`}</span>
+                      <p className="truncate text-sm text-fg">{d.keyword}</p>
+                    </div>
+                    <div className="text-right shrink-0">
+                      <p className="text-sm font-semibold text-red">{d.fromPosition ?? '—'} → {d.toPosition ?? 'lost'}</p>
+                      {d.volume != null && <p className="text-[10px] text-fg-dim">vol {d.volume.toLocaleString()}</p>}
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+          )}
+
+          {keywordsGained.length > 0 && (
+            <div className="mt-3 flex flex-wrap gap-1.5 items-center">
+              <span className="text-[11px] font-semibold uppercase tracking-wider text-fg-muted">Gained:</span>
+              {keywordsGained.slice(0, 6).map((g) => (
+                <span key={g.keyword} className="text-[10px] bg-green/15 text-green border border-green/30 px-2 py-0.5 rounded">
+                  {g.keyword} {g.fromPosition ?? '—'}→{g.toPosition ?? '—'}
+                </span>
+              ))}
+            </div>
+          )}
+        </motion.div>
+      )}
 
       {/* Filters */}
       <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.4, delay: 0.2 }} className="bg-bg-card border border-border rounded-xl p-3.5 md:p-4 card-glow">

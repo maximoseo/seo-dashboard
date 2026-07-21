@@ -9,6 +9,7 @@ import { z } from 'zod'
 import crypto from 'node:crypto'
 import { createClient } from '@supabase/supabase-js'
 import { generateAlerts } from './alerts/rules.js'
+import { analyzeKeywordSeries, detectMetricAnomaly, type MetricPoint } from './alerts/anomaly.js'
 import { createSeoTaskFromAlert } from './tasks/createSeoTask.js'
 import {
   REPORT_TEMPLATES,
@@ -31,7 +32,7 @@ import {
   type ProjectStatus,
   type SeedProject,
 } from './projects/projectSummary.js'
-import { alertsFromSnapshotRows, buildSnapshotOverlayMap } from './data/snapshotSpine.js'
+import { alertsFromSnapshotRows, buildSnapshotOverlayMap, extractProviderMetrics } from './data/snapshotSpine.js'
 import { loadLatestSnapshots, loadOpenCounts, persistAlertsAndTasks } from './data/persistOps.js'
 import { loadAgenticOsBridge, pushCriticalAlertToAsana, pushCriticalAlertToTodo } from './integrations/bridges.js'
 import { resolveMarket, serankingResearchUrl } from './markets/resolveMarket.js'
@@ -682,6 +683,32 @@ async function loadSnapshotPayload(domain: string, provider: string): Promise<{ 
   const accepted = acceptSnapshotForDomain({ data: data.data, fetchedAt: data.fetched_at || null }, domain)
   if (!accepted) return null
   return { data: accepted.data, fetchedAt: data.fetched_at || null }
+}
+
+/** Full-payload snapshot history for a provider (oldest → newest), domain-integrity filtered. */
+async function loadSnapshotPayloadHistory(
+  domain: string,
+  provider: string,
+  limit = 12,
+): Promise<Array<{ data: any; fetchedAt: string | null }>> {
+  if (!supabaseAdmin) return []
+  const domainId = await findDomainId(domain)
+  if (!domainId) return []
+  const take = Math.min(Math.max(Number(limit) || 12, 2), 30)
+  const { data } = await supabaseAdmin
+    .from('seo_snapshots')
+    .select('data, fetched_at')
+    .eq('domain_id', domainId)
+    .eq('provider', provider)
+    .order('fetched_at', { ascending: false })
+    .limit(take)
+  if (!Array.isArray(data)) return []
+  const rows: Array<{ data: any; fetchedAt: string | null }> = []
+  for (const row of data) {
+    const accepted = acceptSnapshotForDomain({ data: row.data, fetchedAt: row.fetched_at || null }, domain)
+    if (accepted?.data) rows.push({ data: accepted.data, fetchedAt: row.fetched_at || null })
+  }
+  return rows.reverse()
 }
 
 /** Recent snapshots for history / compare (Site Audit Phase 2). */
@@ -3529,6 +3556,73 @@ app.get('/api/alerts/aggregated', expensiveLimiter, async (req, res) => {
     alerts: [...ruleAlerts, ...alerts],
     activeSources,
     source: activeSources.join(', '),
+  }, domain))
+})
+
+// Anomaly detection — statistical (MAD z-score) on snapshot history: traffic/visibility metrics + keyword drops
+app.get('/api/anomalies/aggregated', expensiveLimiter, async (req, res) => {
+  const { domain, limit } = req.query as Record<string, string>
+  if (!domain?.trim()) return res.status(400).json({ error: 'domain required' })
+  const clean = canonicalizeDomain(domain)
+  const take = Math.min(Math.max(Number(limit) || 12, 4), 30)
+
+  const [kwHistory, overviewHistory, competitorsHistory] = await Promise.all([
+    loadSnapshotPayloadHistory(clean, 'keywords_agg', take),
+    loadSnapshotPayloadHistory(clean, 'overview', take),
+    loadSnapshotPayloadHistory(clean, 'competitors_agg', take),
+  ])
+
+  // Metric series: organic traffic / top10 keywords from overview snapshots
+  const trafficSeries: MetricPoint[] = []
+  const top10Series: MetricPoint[] = []
+  for (const snap of overviewHistory) {
+    const m = extractProviderMetrics('overview', snap.data as Record<string, any>)
+    if (typeof m.organicTraffic === 'number') trafficSeries.push({ date: snap.fetchedAt, value: m.organicTraffic })
+    if (typeof m.organicKeywords === 'number') top10Series.push({ date: snap.fetchedAt, value: m.organicKeywords })
+  }
+
+  // SOV series from competitors snapshots (feature added 2026-07-21 — older snapshots may lack it)
+  const sovSeries: MetricPoint[] = []
+  for (const snap of competitorsHistory) {
+    const sov = (snap.data as any)?.shareOfVoice?.ourSov
+    if (typeof sov === 'number') sovSeries.push({ date: snap.fetchedAt, value: sov })
+  }
+
+  const metricAnomalies = [
+    detectMetricAnomaly({ metric: 'organicTraffic', label: 'Organic traffic', series: trafficSeries }),
+    detectMetricAnomaly({ metric: 'top10Keywords', label: 'Top 10 keywords', series: top10Series }),
+    detectMetricAnomaly({ metric: 'shareOfVoice', label: 'Share of Voice', series: sovSeries, minPoints: 3 }),
+  ].filter(Boolean)
+
+  // Keyword position series from keywords_agg snapshots
+  const kwSnapshots = kwHistory.map((s) => ({
+    date: s.fetchedAt,
+    rows: (Array.isArray((s.data as any)?.normalized) ? (s.data as any).normalized : []) as KeywordRow[],
+  }))
+  const kwAnalysis = analyzeKeywordSeries({ snapshots: kwSnapshots })
+
+  const snapshotsUsed = Math.max(kwSnapshots.length, overviewHistory.length, competitorsHistory.length)
+  const note =
+    snapshotsUsed >= 4
+      ? `MAD z-score anomaly detection over ${snapshotsUsed} snapshots (baseline = trailing median).`
+      : snapshotsUsed >= 2
+        ? 'Limited history — keyword drops vs best trailing snapshot; metric anomalies need ≥4 points.'
+        : 'Not enough snapshots yet — anomalies appear after the next syncs.'
+
+  res.json(stampPayload({
+    metricAnomalies,
+    keywordDrops: kwAnalysis.drops,
+    keywordsGained: kwAnalysis.gained,
+    keywordsCompared: kwAnalysis.compared,
+    snapshotsUsed,
+    series: {
+      traffic: trafficSeries,
+      top10: top10Series,
+      shareOfVoice: sovSeries,
+    },
+    note,
+    activeSources: ['Rules Engine'],
+    dataState: snapshotsUsed ? 'live' : 'unavailable',
   }, domain))
 })
 
