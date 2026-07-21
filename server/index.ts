@@ -4212,6 +4212,14 @@ app.get('/api/cron/health', (_req, res) => {
   res.json({ ok: true, service: 'seo-dashboard-cron', time: new Date().toISOString() })
 })
 
+// TEMP DIAGNOSTIC (remove after RESEND fix): which env keys are present in the function runtime
+app.get('/api/env-check', (_req, res) => {
+  const keys = ['RESEND_API_KEY', 'SUPABASE_URL', 'SUPABASE_ANON_KEY', 'SUPABASE_SERVICE_ROLE', 'SEMRUSH_API_KEY', 'DATAFORSEO_AUTH', 'CRON_SECRET', 'DASHBOARD_AUTH_USERNAME']
+  const presence: Record<string, boolean> = {}
+  for (const k of keys) presence[k] = Boolean(process.env[k])
+  res.json({ ok: true, presence, node: process.version })
+})
+
 app.get('/api/cron/nightly-sync', expensiveLimiter, async (req, res) => {
   try {
     const limit = Number((req.query as any).limit || 20)
