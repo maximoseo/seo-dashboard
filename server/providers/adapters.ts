@@ -150,6 +150,13 @@ export function keywordsFromDataForSEO(payload: any): KeywordRow[] {
           ?? item?.difficulty)
         // DataForSEO competition is often 0-1; convert to 0-100 when needed
         const difficulty = kdRaw != null && kdRaw <= 1 ? Math.round(kdRaw * 100) : kdRaw
+        // SERP feature types present on this keyword's SERP (minus 'organic')
+        const rawTypes = item?.keyword_data?.serp_info?.serp_item_types
+          ?? item?.ranked_serp_element?.serp_item_types
+          ?? []
+        const serpFeatures = (Array.isArray(rawTypes) ? rawTypes : [])
+          .map((t: any) => str(t))
+          .filter((t: string | null): t is string => Boolean(t) && t !== 'organic')
         out.push({
           keyword: str(kw) || '',
           position,
@@ -164,7 +171,7 @@ export function keywordsFromDataForSEO(payload: any): KeywordRow[] {
           sourcePositions: { dataforseo: position },
           volumeBySource: volume != null ? { dataforseo: volume } : undefined,
           intent: null,
-          serpFeatures: [],
+          serpFeatures,
         })
       }
     }
@@ -1203,5 +1210,135 @@ export function computeKeywordIntel(rows: KeywordRow[]): {
       totalVolume: list.reduce((s, r) => s + (Number(r.volume) || 0), 0),
       totalTraffic: list.reduce((s, r) => s + (Number(r.traffic) || 0), 0),
     },
+  }
+}
+
+export type SerpFeatureStat = {
+  feature: string
+  label: string
+  count: number
+  ourTop10: number
+  ourTop3: number
+  totalVolume: number
+  delta: number | null
+}
+
+export type SerpFeatureStatsResult = {
+  features: SerpFeatureStat[]
+  keywordsWithFeatures: number
+  keywordsTotal: number
+  coveragePct: number
+}
+
+const SERP_FEATURE_LABELS: Record<string, string> = {
+  ai_overview: 'AI Overview',
+  featured_snippet: 'Featured Snippet',
+  local_pack: 'Local Pack',
+  map: 'Map',
+  google_reviews: 'Google Reviews',
+  knowledge_graph: 'Knowledge Graph',
+  video: 'Video',
+  short_videos: 'Short Videos',
+  images: 'Images',
+  people_also_ask: 'People Also Ask',
+  people_also_search: 'People Also Search',
+  shopping: 'Shopping',
+  news: 'News',
+  related_searches: 'Related Searches',
+  jobs: 'Jobs',
+  events: 'Events',
+  recipes: 'Recipes',
+  tweets: 'Tweets',
+  scholarly_articles: 'Scholarly Articles',
+}
+
+const SERP_FEATURE_PRIORITY = [
+  'ai_overview',
+  'featured_snippet',
+  'local_pack',
+  'map',
+  'google_reviews',
+  'knowledge_graph',
+  'video',
+  'short_videos',
+  'images',
+  'people_also_ask',
+  'people_also_search',
+  'shopping',
+  'news',
+  'related_searches',
+]
+
+function featureLabel(feature: string): string {
+  return SERP_FEATURE_LABELS[feature] || feature.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())
+}
+
+/**
+ * Aggregate SERP feature coverage across tracked keywords.
+ * Counts how many keywords have each feature on their SERP, our rank strength there,
+ * and (optionally) the count delta vs a previous keyword set (snapshot tracking).
+ */
+export function computeSerpFeatureStats(
+  rows: KeywordRow[],
+  opts?: { previous?: KeywordRow[] },
+): SerpFeatureStatsResult {
+  const list = Array.isArray(rows) ? rows : []
+  const prevList = Array.isArray(opts?.previous) ? opts!.previous! : []
+
+  const countFor = (setRows: KeywordRow[], feature: string): number => {
+    let n = 0
+    for (const row of setRows) {
+      const feats = Array.isArray(row.serpFeatures) ? row.serpFeatures.map((f) => String(f).toLowerCase()) : []
+      if (feats.includes(feature)) n += 1
+    }
+    return n
+  }
+
+  const acc = new Map<string, { count: number; ourTop10: number; ourTop3: number; totalVolume: number }>()
+  let keywordsWithFeatures = 0
+
+  for (const row of list) {
+    const feats = Array.isArray(row.serpFeatures)
+      ? [...new Set(row.serpFeatures.map((f) => String(f).toLowerCase()).filter(Boolean))]
+      : []
+    if (!feats.length) continue
+    keywordsWithFeatures += 1
+    const pos = row.position != null && Number(row.position) > 0 ? Number(row.position) : null
+    for (const feature of feats) {
+      let entry = acc.get(feature)
+      if (!entry) {
+        entry = { count: 0, ourTop10: 0, ourTop3: 0, totalVolume: 0 }
+        acc.set(feature, entry)
+      }
+      entry.count += 1
+      if (pos != null && pos <= 10) entry.ourTop10 += 1
+      if (pos != null && pos <= 3) entry.ourTop3 += 1
+      entry.totalVolume += Number(row.volume) || 0
+    }
+  }
+
+  const features: SerpFeatureStat[] = [...acc.entries()].map(([feature, e]) => ({
+    feature,
+    label: featureLabel(feature),
+    count: e.count,
+    ourTop10: e.ourTop10,
+    ourTop3: e.ourTop3,
+    totalVolume: e.totalVolume,
+    delta: prevList.length ? e.count - countFor(prevList, feature) : null,
+  }))
+
+  features.sort((a, b) => {
+    const ai = SERP_FEATURE_PRIORITY.indexOf(a.feature)
+    const bi = SERP_FEATURE_PRIORITY.indexOf(b.feature)
+    const ap = ai < 0 ? SERP_FEATURE_PRIORITY.length : ai
+    const bp = bi < 0 ? SERP_FEATURE_PRIORITY.length : bi
+    return ap - bp || b.count - a.count || b.totalVolume - a.totalVolume
+  })
+
+  return {
+    features,
+    keywordsWithFeatures,
+    keywordsTotal: list.length,
+    coveragePct: list.length ? Math.round((keywordsWithFeatures / list.length) * 1000) / 10 : 0,
   }
 }

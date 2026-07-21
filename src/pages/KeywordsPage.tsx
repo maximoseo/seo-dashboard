@@ -18,6 +18,27 @@ import { useDomainSwitchCleanup } from '@/lib/useDomainQuery'
 type SortDir = 'asc' | 'desc'
 type SortKey = 'keyword' | 'volume' | 'position' | 'difficulty' | 'cpc' | 'traffic' | 'value'
 
+const FEATURE_SHORT: Record<string, string> = {
+  ai_overview: 'AI',
+  featured_snippet: 'FS',
+  local_pack: 'LP',
+  map: 'Map',
+  google_reviews: 'GR',
+  knowledge_graph: 'KG',
+  video: 'Vid',
+  short_videos: 'SVid',
+  images: 'Img',
+  people_also_ask: 'PAA',
+  people_also_search: 'PAS',
+  shopping: 'Shop',
+  news: 'News',
+  related_searches: 'Rel',
+}
+
+function featureShort(feature: string): string {
+  return FEATURE_SHORT[feature.toLowerCase()] || feature.slice(0, 5)
+}
+
 type ProviderKey = 'semrush' | 'ahrefs' | 'dataforseo' | 'serpstat' | 'keywords_everywhere'
 
 interface Keyword {
@@ -295,6 +316,7 @@ export default function KeywordsPage() {
 
   const movements = apiData?.movements || null
   const intel = (apiData as any)?.intel || null
+  const serpFeatureStats = (apiData as any)?.serpFeatureStats || null
   const activeSources: string[] = Array.isArray(apiData?.activeSources) ? apiData.activeSources : []
   const softDegraded = Array.isArray(apiData?.softDegraded) ? apiData.softDegraded : []
   const marketLabel = apiData?.market?.label || null
@@ -641,6 +663,41 @@ export default function KeywordsPage() {
         </div>
       ) : null}
 
+      {/* SERP feature tracking — AI Overview, Local Pack, Featured Snippet… with snapshot deltas */}
+      {serpFeatureStats?.features?.length ? (
+        <div className="bg-bg-card border border-border rounded-xl p-3.5 md:p-4">
+          <div className="flex items-center justify-between gap-2 mb-3">
+            <div>
+              <p className="text-[10px] md:text-xs font-semibold uppercase tracking-wider text-fg-muted">SERP features</p>
+              <p className="text-[11px] text-fg-dim mt-0.5">
+                {serpFeatureStats.keywordsWithFeatures} of {serpFeatureStats.keywordsTotal} tracked keywords have SERP features · coverage {serpFeatureStats.coveragePct}%
+              </p>
+            </div>
+          </div>
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-2.5">
+            {serpFeatureStats.features.map((f: any) => (
+              <div key={f.feature} className="rounded-xl border border-border bg-bg-darkest p-3">
+                <div className="flex items-start justify-between gap-1.5">
+                  <p className="text-[11px] font-medium text-fg leading-tight">{f.label}</p>
+                  {f.delta != null && f.delta !== 0 && (
+                    <span className={`text-[10px] font-semibold tabular-nums shrink-0 ${f.delta > 0 ? 'text-green' : 'text-red'}`}>
+                      {f.delta > 0 ? '▲' : '▼'}{Math.abs(f.delta)}
+                    </span>
+                  )}
+                </div>
+                <p className="text-xl font-bold tabular-nums text-fg mt-1">{f.count}</p>
+                <p className="text-[10px] text-fg-dim mt-1 tabular-nums">
+                  we rank top10 in {f.ourTop10}{f.ourTop3 > 0 ? ` · top3 in ${f.ourTop3}` : ''}
+                </p>
+                {f.totalVolume > 0 && (
+                  <p className="text-[10px] text-fg-dim tabular-nums">SV {formatMetric(Math.round(f.totalVolume))}</p>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      ) : null}
+
       {/* Opportunities / page clusters / cannibalization */}
       {(filteredOpps.length > 0 || clientIntel?.pageClusters?.length || clientIntel?.cannibalization?.length) ? (
         <div className="bg-bg-card border border-border rounded-xl p-3.5 md:p-4 space-y-3">
@@ -958,6 +1015,15 @@ export default function KeywordsPage() {
                           {kw.intent}
                         </span>
                         <SourceBadge source={kw.source} />
+                        {kw.serpFeatures.slice(0, 5).map((f) => (
+                          <span
+                            key={f}
+                            title={f.replace(/_/g, ' ')}
+                            className="text-[9px] px-1 py-0.5 rounded border border-purple-400/30 bg-purple-500/10 text-purple-300 font-medium"
+                          >
+                            {featureShort(f)}
+                          </span>
+                        ))}
                       </div>
                     </div>
                     <div className="text-right shrink-0">

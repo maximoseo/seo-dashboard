@@ -44,6 +44,7 @@ import {
   computeCompetitorGaps,
   computeKeywordIntel,
   computeLinkIntel,
+  computeSerpFeatureStats,
   computeShareOfVoice,
   competitorsFromDataForSEO,
   competitorsFromExa,
@@ -1521,6 +1522,7 @@ app.get('/api/keywords/aggregated', expensiveLimiter, async (req, res) => {
         snap.normalized = kwIntegrity.rows
         snap.movements = snap.movements || keywordMovements(kwIntegrity.rows)
         snap.intel = computeKeywordIntel(kwIntegrity.rows)
+        snap.serpFeatureStats = snap.serpFeatureStats || computeSerpFeatureStats(kwIntegrity.rows)
         return res.json(stampPayload(snap, domain, { foreignRowsDropped: kwIntegrity.foreignRowsDropped }))
       }
       return res.json(stampPayload(snap, domain))
@@ -1646,6 +1648,16 @@ app.get('/api/keywords/aggregated', expensiveLimiter, async (req, res) => {
   result.normalized = kwIntegrity.rows
   result.movements = keywordMovements(kwIntegrity.rows)
   result.intel = computeKeywordIntel(kwIntegrity.rows)
+  // SERP feature stats with delta vs the previous keywords snapshot (tracking over time)
+  try {
+    const prevSnap = await loadSnapshotPayloadHistory(domain, 'keywords_agg', 2)
+    const prevRows = prevSnap.length >= 2 && Array.isArray(prevSnap[prevSnap.length - 2]?.data?.normalized)
+      ? (prevSnap[prevSnap.length - 2].data.normalized as KeywordRow[])
+      : []
+    result.serpFeatureStats = computeSerpFeatureStats(kwIntegrity.rows, { previous: prevRows })
+  } catch {
+    result.serpFeatureStats = computeSerpFeatureStats(kwIntegrity.rows)
+  }
   const stamped = stampPayload(result, domain, {
     foreignRowsDropped: kwIntegrity.foreignRowsDropped,
     selfRowsDropped: 0,
