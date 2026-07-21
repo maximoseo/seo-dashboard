@@ -45,6 +45,7 @@ import {
   computeKeywordIntel,
   computeLinkIntel,
   computeSerpFeatureStats,
+  computeCannibalization,
   computeShareOfVoice,
   competitorsFromDataForSEO,
   competitorsFromExa,
@@ -1622,12 +1623,14 @@ app.get('/api/keywords/aggregated', expensiveLimiter, async (req, res) => {
     result.sources.seranking = { configured: true, active: false, note: 'SE Ranking auth unstable; skipped' }
   }
 
-  let keywords = mergeKeywordRows([
-    keywordsFromSemrush(result.sources.semrush),
-    keywordsFromAhrefs(result.sources.ahrefs),
-    keywordsFromDataForSEO(result.sources.dataforseo),
-    keywordsFromSerpstat(result.sources.serpstat),
-  ])
+  // Keep pre-merge rows for cannibalization detection (merge collapses URLs to one per keyword)
+  const rawKeywordRows = [
+    ...keywordsFromSemrush(result.sources.semrush),
+    ...keywordsFromAhrefs(result.sources.ahrefs),
+    ...keywordsFromDataForSEO(result.sources.dataforseo),
+    ...keywordsFromSerpstat(result.sources.serpstat),
+  ]
+  let keywords = mergeKeywordRows([rawKeywordRows])
 
   // Optional volume enrichment from Keywords Everywhere (soft).
   if (KEYWORDS_EVERYWHERE_API_KEY && keywords.length) {
@@ -1648,6 +1651,10 @@ app.get('/api/keywords/aggregated', expensiveLimiter, async (req, res) => {
   result.normalized = kwIntegrity.rows
   result.movements = keywordMovements(kwIntegrity.rows)
   result.intel = computeKeywordIntel(kwIntegrity.rows)
+  // Cannibalization from pre-merge rows (merge collapses URLs to one per keyword, so the heuristic needs raw source rows)
+  if (result.intel) {
+    result.intel.cannibalization = computeCannibalization(rawKeywordRows)
+  }
   // SERP feature stats with delta vs the previous keywords snapshot (tracking over time)
   try {
     const prevSnap = await loadSnapshotPayloadHistory(domain, 'keywords_agg', 2)

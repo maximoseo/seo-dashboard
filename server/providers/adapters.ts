@@ -986,6 +986,9 @@ export type CannibalCluster = {
   bestPosition: number | null
   volume: number | null
   sources: string[]
+  severity?: 'high' | 'medium' | 'low'
+  /** Position per landing URL (best-effort, from source rows). */
+  positions?: Record<string, number | null>
 }
 
 export type PageCluster = {
@@ -997,6 +1000,71 @@ export type PageCluster = {
   traffic: number
   bestPosition: number | null
   sampleKeywords: string[]
+}
+
+/**
+ * Cannibalization detector — run on PRE-MERGE rows (each source row keeps its own URL).
+ * Fires when one keyword maps to >= 2 distinct landing URLs across all rows.
+ * Severity: high = 2+ URLs on page 1 (pos<=10) or 3+ URLs with pos<=20;
+ *           medium = 2 URLs with at least one pos<=20; low = everything else.
+ */
+export function computeCannibalization(rows: KeywordRow[]): CannibalCluster[] {
+  const byKw = new Map<string, KeywordRow[]>()
+  for (const row of Array.isArray(rows) ? rows : []) {
+    const key = String(row.keyword || '').toLowerCase().trim()
+    if (!key) continue
+    const arr = byKw.get(key) || []
+    arr.push(row)
+    byKw.set(key, arr)
+  }
+
+  const clusters: CannibalCluster[] = []
+  for (const group of byKw.values()) {
+    const normUrl = (u: string | null | undefined) =>
+      String(u || '').split('?')[0].replace(/\/+$/, '')
+    const urlSet = new Map<string, { positions: number[] }>()
+    for (const row of group) {
+      const u = normUrl(row.url)
+      if (!u) continue
+      const entry = urlSet.get(u) || { positions: [] }
+      if (row.position != null && Number(row.position) > 0) entry.positions.push(Number(row.position))
+      urlSet.set(u, entry)
+    }
+    if (urlSet.size < 2) continue
+
+    const allPositions = group
+      .map((g) => (g.position != null && Number(g.position) > 0 ? Number(g.position) : null))
+      .filter((p): p is number => p != null)
+    const best = allPositions.length ? Math.min(...allPositions) : null
+    const page1Urls = [...urlSet.values()].filter((e) => e.positions.some((p) => p <= 10)).length
+    const page2Urls = [...urlSet.values()].filter((e) => e.positions.some((p) => p <= 20)).length
+
+    let severity: CannibalCluster['severity'] = 'low'
+    if (page1Urls >= 2 || page2Urls >= 3) severity = 'high'
+    else if (page2Urls >= 2) severity = 'medium'
+
+    const positions: Record<string, number | null> = {}
+    for (const [u, e] of urlSet) positions[u] = e.positions.length ? Math.min(...e.positions) : null
+
+    clusters.push({
+      keyword: group[0].keyword,
+      urls: [...urlSet.keys()].slice(0, 6),
+      bestPosition: best,
+      volume: group.reduce((s, g) => Math.max(s, Number(g.volume) || 0), 0) || null,
+      sources: [...new Set(group.map((g) => g.source).filter(Boolean))],
+      severity,
+      positions,
+    })
+  }
+
+  const sevRank = { high: 0, medium: 1, low: 2 }
+  clusters.sort(
+    (a, b) =>
+      sevRank[a.severity || 'low'] - sevRank[b.severity || 'low'] ||
+      (b.volume || 0) - (a.volume || 0) ||
+      (a.bestPosition || 999) - (b.bestPosition || 999),
+  )
+  return clusters.slice(0, 25)
 }
 
 /**

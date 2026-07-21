@@ -816,25 +816,43 @@ export default function KeywordsPage() {
 
           {intelTab === 'cannibalization' && (
             <div className="space-y-2 max-h-80 overflow-auto">
-              {(clientIntel?.cannibalization || []).slice(0, 12).map((c: any) => (
-                <div key={c.keyword} className="rounded-xl border border-border bg-bg-darkest px-3 py-2.5">
-                  <div className="flex items-start justify-between gap-2">
-                    <p className="text-sm font-medium text-fg">{c.keyword}</p>
-                    <span className="text-xs tabular-nums text-amber-300 shrink-0">{c.urls?.length || 0} URLs</span>
+              {(clientIntel?.cannibalization || []).slice(0, 12).map((c: any) => {
+                const sev = c.severity || 'low'
+                const sevTone =
+                  sev === 'high'
+                    ? 'border-red/40 bg-red/10 text-red'
+                    : sev === 'medium'
+                      ? 'border-amber-500/40 bg-amber-500/10 text-amber-300'
+                      : 'border-border bg-white/[0.04] text-fg-muted'
+                return (
+                  <div key={c.keyword} className="rounded-xl border border-border bg-bg-darkest px-3 py-2.5">
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="min-w-0">
+                        <p className="text-sm font-medium text-fg">{c.keyword}</p>
+                        <p className="text-[11px] text-fg-dim mt-0.5">
+                          Best #{c.bestPosition ?? '—'}
+                          {c.volume != null ? ` · SV ${formatMetric(c.volume)}` : ''}
+                          {c.sources?.length ? ` · ${c.sources.join(', ')}` : ''}
+                        </p>
+                      </div>
+                      <div className="flex items-center gap-1.5 shrink-0">
+                        <span className={`text-[10px] px-1.5 py-0.5 rounded border font-medium ${sevTone}`}>{sev}</span>
+                        <span className="text-xs tabular-nums text-amber-300">{c.urls?.length || 0} URLs</span>
+                      </div>
+                    </div>
+                    <ul className="mt-1.5 space-y-0.5">
+                      {(c.urls || []).slice(0, 4).map((u: string) => (
+                        <li key={u} className="flex items-center justify-between gap-2 text-[11px] text-fg-muted">
+                          <span className="truncate">{u.replace(/^https?:\/\//, '')}</span>
+                          {c.positions?.[u] != null && (
+                            <span className="tabular-nums text-fg-dim shrink-0">#{c.positions[u]}</span>
+                          )}
+                        </li>
+                      ))}
+                    </ul>
                   </div>
-                  <p className="text-[11px] text-fg-dim mt-1">
-                    Best #{c.bestPosition ?? '—'}
-                    {c.volume != null ? ` · SV ${formatMetric(c.volume)}` : ''}
-                  </p>
-                  <ul className="mt-1.5 space-y-0.5">
-                    {(c.urls || []).slice(0, 4).map((u: string) => (
-                      <li key={u} className="text-[11px] text-fg-muted truncate">
-                        {u.replace(/^https?:\/\//, '')}
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-              ))}
+                )
+              })}
               {!clientIntel?.cannibalization?.length && (
                 <p className="text-xs text-fg-dim py-2">
                   No multi-URL cannibalization signals detected in the merged inventory.
