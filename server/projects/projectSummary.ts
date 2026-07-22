@@ -93,7 +93,7 @@ export function buildProjectSummaries(
   overlays?: Map<string, ProjectOverlayInput> | Record<string, ProjectOverlayInput>,
 ): ProjectSummary[] {
   const fetchedAt = new Date().toISOString()
-  const dataState: DataState = source === 'supabase' ? 'live' : 'cached'
+  const baseLiveState: DataState = source === 'supabase' ? 'live' : 'cached'
   const getOverlay = (project: SeedProject): ProjectOverlayInput | undefined => {
     if (!overlays) return undefined
     if (overlays instanceof Map) {
@@ -102,29 +102,46 @@ export function buildProjectSummaries(
     return overlays[project.id] || overlays[project.domain]
   }
 
+  const spineModules: ProjectModuleSlug[] = ['overview', 'alerts', 'tasks', 'reports', 'settings']
+
   return seedProjects.map(project => {
     const overlay = getOverlay(project)
-    // Durable tables beat invention: only local-seed/fallback may synthesize counters.
+    // Durable tables beat invention: ONLY local-seed/fallback (dev, never production) may synthesize counters/score.
     const inventDemoCounts = source !== 'supabase' && !overlay
+    // A "real spine" means durable, measured evidence exists (from snapshots/alerts/tasks overlay).
     const hasRealSpine = Boolean(
       overlay && (overlay.lastFetchedAt || overlay.healthScore != null || (overlay.alertCount ?? 0) > 0 || (overlay.taskCount ?? 0) > 0),
     )
+
+    // P0 truth rule: a Supabase roster project with no measured spine must NOT receive a synthetic
+    // health score, must NOT be marked live, and its modules must NOT claim live/cached.
+    const measuredDataState: DataState =
+      overlay?.dataState ??
+      (hasRealSpine ? baseLiveState
+        : inventDemoCounts ? 'cached'            // local-seed demo only (excluded from production)
+          : source === 'supabase' ? 'unavailable' // durable roster row, but no metrics collected yet
+            : baseLiveState)
+
+    const moduleState = (module: Omit<ProjectModuleSummary, 'href'>): DataState => {
+      if (module.state === 'planned') return 'planned'                 // scaffolds stay honestly planned
+      if (hasRealSpine) return spineModules.includes(module.slug) ? 'live' : 'cached'
+      if (inventDemoCounts) return module.state                        // dev demo keeps illustrative state
+      return 'unavailable'                                             // roster w/o spine: no live/cached promise
+    }
+
     return {
       ...project,
-      healthScore: overlay?.healthScore ?? (inventDemoCounts ? stableProjectScore(project) : (hasRealSpine ? null : stableProjectScore(project))),
+      healthScore: overlay?.healthScore ?? (inventDemoCounts ? stableProjectScore(project) : null),
       alertCount: overlay?.alertCount ?? (inventDemoCounts ? stableCount(project, 11, 6) : 0),
       taskCount: overlay?.taskCount ?? (inventDemoCounts ? stableCount(project, 17, 9) + 1 : 0),
-      dataState: overlay?.dataState ?? dataState,
+      dataState: measuredDataState,
       connectedSources: overlay?.connectedSources?.length
         ? overlay.connectedSources
         : (source === 'supabase' ? ['Supabase roster'] : ['Rules Engine', 'SEMrush', 'DataForSEO', 'PageSpeed']),
       lastFetchedAt: overlay?.lastFetchedAt ?? (inventDemoCounts ? fetchedAt : null),
       modules: moduleDefinitions.map(module => ({
         ...module,
-        // Prefer live when durable snapshots/count spine exist for overview family.
-        state: hasRealSpine && ['overview', 'alerts', 'tasks', 'reports', 'settings'].includes(module.slug)
-          ? ('live' as DataState)
-          : module.state,
+        state: moduleState(module),
         href: module.slug === 'overview'
           ? `/projects/${encodeURIComponent(project.domain)}`
           : `/projects/${encodeURIComponent(project.domain)}/${module.slug}`,
