@@ -35,6 +35,7 @@ import {
   type SeedProject,
 } from './projects/projectSummary.js'
 import { alertsFromSnapshotRows, buildSnapshotOverlayMap, extractProviderMetrics } from './data/snapshotSpine.js'
+import { reserveProviderBudget } from './providers/budgetLedger.js'
 import { loadLatestSnapshots, loadOpenCounts, persistAlertsAndTasks } from './data/persistOps.js'
 import { loadAgenticOsBridge, pushCriticalAlertToAsana, pushCriticalAlertToTodo } from './integrations/bridges.js'
 import { resolveMarket, serankingResearchUrl } from './markets/resolveMarket.js'
@@ -411,7 +412,6 @@ app.post('/api/auth/logout', (req, res) => {
 // ═══════════════════════════════════════════════════════════════════════════════
 // SECURITY: Per-provider daily budget caps
 // ═══════════════════════════════════════════════════════════════════════════════
-const budgetTracker: Record<string, { count: number; date: string }> = {}
 const DAILY_BUDGETS: Record<string, number> = {
   ahrefs: 100,
   semrush: 100,
@@ -424,31 +424,20 @@ const DAILY_BUDGETS: Record<string, number> = {
   seranking: 100,
 }
 
-function checkBudget(provider: string): boolean {
-  const today = new Date().toISOString().split('T')[0]
-  const tracker = budgetTracker[provider]
-  
-  if (!tracker || tracker.date !== today) {
-    budgetTracker[provider] = { count: 1, date: today }
-    return true
-  }
-  
-  const limit = DAILY_BUDGETS[provider] || 100
-  if (tracker.count >= limit) {
-    return false
-  }
-  
-  tracker.count++
-  return true
-}
-
+// Reserve against the durable, global daily cap (server/providers/budgetLedger.ts). When the
+// service-role client is present the reservation is atomic in Postgres and holds across every
+// serverless instance; otherwise it degrades to a per-process guard (flagged, non-authoritative).
 function budgetMiddleware(provider: string) {
-  return (_req: express.Request, res: express.Response, next: express.NextFunction) => {
-    if (!checkBudget(provider)) {
-      return res.status(429).json({ 
+  return async (_req: express.Request, res: express.Response, next: express.NextFunction) => {
+    const limit = DAILY_BUDGETS[provider] || 100
+    const decision = await reserveProviderBudget(supabaseAdmin as any, provider, limit)
+    if (!decision.allowed) {
+      return res.status(429).json({
         error: `Daily budget cap reached for ${provider}. Try again tomorrow or contact admin.`,
         provider,
-        limit: DAILY_BUDGETS[provider] || 100,
+        limit: decision.limit,
+        used: decision.used,
+        store: decision.store,
       })
     }
     next()
