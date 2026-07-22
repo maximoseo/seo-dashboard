@@ -35,6 +35,7 @@ import {
   type SeedProject,
 } from './projects/projectSummary.js'
 import { alertsFromSnapshotRows, buildSnapshotOverlayMap, extractProviderMetrics } from './data/snapshotSpine.js'
+import { reserveProviderBudget } from './providers/budgetLedger.js'
 import { loadLatestSnapshots, loadOpenCounts, persistAlertsAndTasks } from './data/persistOps.js'
 import { loadAgenticOsBridge, pushCriticalAlertToAsana, pushCriticalAlertToTodo } from './integrations/bridges.js'
 import { resolveMarket, serankingResearchUrl } from './markets/resolveMarket.js'
@@ -244,6 +245,7 @@ function clearSessionCookie(req: express.Request): string {
 app.use('/api', async (req, res, next) => {
   if (
     req.path === '/health' ||
+    req.path === '/version' ||
     req.path === '/auth/login' ||
     (req.method === 'GET' && (req.path === '/reports/share' || /^\/reports\/share\/[^/]+$/.test(req.path)))
   ) {
@@ -410,7 +412,6 @@ app.post('/api/auth/logout', (req, res) => {
 // ═══════════════════════════════════════════════════════════════════════════════
 // SECURITY: Per-provider daily budget caps
 // ═══════════════════════════════════════════════════════════════════════════════
-const budgetTracker: Record<string, { count: number; date: string }> = {}
 const DAILY_BUDGETS: Record<string, number> = {
   ahrefs: 100,
   semrush: 100,
@@ -423,31 +424,20 @@ const DAILY_BUDGETS: Record<string, number> = {
   seranking: 100,
 }
 
-function checkBudget(provider: string): boolean {
-  const today = new Date().toISOString().split('T')[0]
-  const tracker = budgetTracker[provider]
-  
-  if (!tracker || tracker.date !== today) {
-    budgetTracker[provider] = { count: 1, date: today }
-    return true
-  }
-  
-  const limit = DAILY_BUDGETS[provider] || 100
-  if (tracker.count >= limit) {
-    return false
-  }
-  
-  tracker.count++
-  return true
-}
-
+// Reserve against the durable, global daily cap (server/providers/budgetLedger.ts). When the
+// service-role client is present the reservation is atomic in Postgres and holds across every
+// serverless instance; otherwise it degrades to a per-process guard (flagged, non-authoritative).
 function budgetMiddleware(provider: string) {
-  return (_req: express.Request, res: express.Response, next: express.NextFunction) => {
-    if (!checkBudget(provider)) {
-      return res.status(429).json({ 
+  return async (_req: express.Request, res: express.Response, next: express.NextFunction) => {
+    const limit = DAILY_BUDGETS[provider] || 100
+    const decision = await reserveProviderBudget(supabaseAdmin as any, provider, limit)
+    if (!decision.allowed) {
+      return res.status(429).json({
         error: `Daily budget cap reached for ${provider}. Try again tomorrow or contact admin.`,
         provider,
-        limit: DAILY_BUDGETS[provider] || 100,
+        limit: decision.limit,
+        used: decision.used,
+        store: decision.store,
       })
     }
     next()
@@ -1015,6 +1005,7 @@ function sanitizeJsonForPg(value: unknown, depth = 0): unknown {
   if (value == null) return value
   if (typeof value === 'string') {
     // drop U+0000 and other non-printable C0 controls except tab/newline
+    // eslint-disable-next-line no-control-regex -- deliberate C0 control-character sanitizer
     return value.replace(/\u0000/g, '').replace(/[\u0001-\u0008\u000B\u000C\u000E-\u001F]/g, '')
   }
   if (typeof value === 'number' || typeof value === 'boolean') return value
@@ -1022,6 +1013,7 @@ function sanitizeJsonForPg(value: unknown, depth = 0): unknown {
   if (typeof value === 'object') {
     const out: Record<string, unknown> = {}
     for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+      // eslint-disable-next-line no-control-regex -- deliberate C0 control-character sanitizer
       const key = String(k).replace(/\u0000/g, '').replace(/[\r\n]+/g, ' ').trim()
       if (!key) continue
       out[key] = sanitizeJsonForPg(v, depth + 1)
@@ -3238,7 +3230,7 @@ app.post('/api/site-audit/recheck-url', expensiveLimiter, async (req, res) => {
 app.post('/api/vitals/aggregated', expensiveLimiter, async (req, res) => {
   const { url } = req.body || {}
   if (!url || !String(url).trim()) return res.status(400).json({ error: 'url required' })
-  let domainFromUrl = ''
+  let domainFromUrl: string
   try { domainFromUrl = canonicalizeDomain(new URL(String(url)).hostname) } catch { domainFromUrl = canonicalizeDomain(String(url)) }
   const result: Record<string, any> = { url, domain: domainFromUrl, sources: {}, activeSources: [] as string[] }
 
@@ -3765,52 +3757,64 @@ app.post('/api/projects', async (req, res) => {
   const { name, domain, clientName, market, status, priority } = req.body
   if (!name || !domain) return res.status(400).json({ error: 'name and domain are required' })
 
-  const cleanDomain = domain.replace(/^https?:\/\//, '').replace(/\/$/, '')
-
-  if (supabase) {
-    try {
-      // Get or create client
-      let clientId: string
-      const { data: existingClient } = await supabase
-        .from('seo_clients')
-        .select('id')
-        .eq('name', clientName || name)
-        .single()
-
-      if (existingClient) {
-        clientId = existingClient.id
-      } else {
-        const { data: newClient, error: clientErr } = await supabase
-          .from('seo_clients')
-          .insert({ name: clientName || name })
-          .select('id')
-          .single()
-        if (clientErr) return res.status(500).json({ error: 'Failed to create client', details: clientErr.message })
-        clientId = newClient.id
-      }
-
-      // Create domain
-      const { data: newDomain, error: domainErr } = await supabase
-        .from('seo_domains')
-        .insert({
-          client_id: clientId,
-          domain: cleanDomain,
-          name,
-          market: market || 'Global',
-          status: status || 'active',
-          priority: priority || 'medium',
-        })
-        .select()
-        .single()
-
-      if (domainErr) return res.status(500).json({ error: 'Failed to create project', details: domainErr.message })
-      return res.status(201).json({ project: newDomain, message: 'Project created' })
-    } catch (err: any) {
-      return res.status(500).json({ error: 'Database error', details: err.message })
-    }
+  // Writes must go through the service-role client after the global API auth gate — the anon client
+  // is bound by RLS (authenticated role) and cannot create roster rows. Fail closed when unconfigured.
+  if (!supabaseAdmin) {
+    return res.status(503).json({ error: 'SUPABASE_SERVICE_ROLE not configured — cannot create projects' })
   }
 
-  res.status(503).json({ error: 'Database not configured' })
+  const cleanDomain = domain.replace(/^https?:\/\//, '').replace(/\/$/, '').toLowerCase()
+
+  try {
+    // Idempotent create: reject a domain that already exists in the roster.
+    const { data: existingDomain } = await supabaseAdmin
+      .from('seo_domains')
+      .select('id')
+      .eq('domain', cleanDomain)
+      .maybeSingle()
+    if (existingDomain) {
+      return res.status(409).json({ error: 'Project already exists', domain: cleanDomain })
+    }
+
+    // Get or create client
+    let clientId: string
+    const { data: existingClient } = await supabaseAdmin
+      .from('seo_clients')
+      .select('id')
+      .eq('name', clientName || name)
+      .maybeSingle()
+
+    if (existingClient) {
+      clientId = existingClient.id
+    } else {
+      const { data: newClient, error: clientErr } = await supabaseAdmin
+        .from('seo_clients')
+        .insert({ name: clientName || name })
+        .select('id')
+        .single()
+      if (clientErr) return res.status(500).json({ error: 'Failed to create client', details: clientErr.message })
+      clientId = newClient.id
+    }
+
+    // Create domain
+    const { data: newDomain, error: domainErr } = await supabaseAdmin
+      .from('seo_domains')
+      .insert({
+        client_id: clientId,
+        domain: cleanDomain,
+        name,
+        market: market || 'Global',
+        status: status || 'active',
+        priority: priority || 'medium',
+      })
+      .select()
+      .single()
+
+    if (domainErr) return res.status(500).json({ error: 'Failed to create project', details: domainErr.message })
+    return res.status(201).json({ project: newDomain, message: 'Project created' })
+  } catch (err: any) {
+    return res.status(500).json({ error: 'Database error', details: err.message })
+  }
 })
 
 app.get('/api/projects/:domain', async (req, res) => {
@@ -5137,6 +5141,17 @@ function providerStatus() {
 
 app.get('/api/health', async (_req, res) => {
   res.json({ ok: true, service: 'seo-dashboard-api', timestamp: new Date().toISOString() })
+})
+
+// Public deployed-version probe so releases can verify the promoted Git SHA in production.
+app.get('/api/version', (_req, res) => {
+  res.json({
+    ok: true,
+    sha: process.env.VERCEL_GIT_COMMIT_SHA || process.env.COMMIT_SHA || process.env.GIT_COMMIT_SHA || 'unknown',
+    ref: process.env.VERCEL_GIT_COMMIT_REF || process.env.GIT_BRANCH || null,
+    env: process.env.VERCEL_ENV || process.env.NODE_ENV || 'unknown',
+    timestamp: new Date().toISOString(),
+  })
 })
 
 app.get('/api/status', async (_req, res) => {

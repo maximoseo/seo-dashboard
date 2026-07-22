@@ -38,4 +38,15 @@ export default tseslint.config(
       },
     },
   },
+  {
+    // Service worker runs in a dedicated worker scope, not window/node.
+    files: ['public/**/*.js'],
+    languageOptions: {
+      ecmaVersion: 'latest',
+      sourceType: 'script',
+      globals: {
+        ...globals.serviceworker,
+      },
+    },
+  },
 )

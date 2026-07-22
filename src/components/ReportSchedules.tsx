@@ -81,7 +81,6 @@ export default function ReportSchedules({ domain, clientName, market }: Props) {
     setSchedules([])
     setNotice(null)
     void load()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [domain])
 
   const create = async () => {

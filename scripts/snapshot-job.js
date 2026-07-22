@@ -136,6 +136,7 @@ function sanitizeJsonForPg(value, depth = 0) {
   if (depth > 40) return null
   if (value == null) return value
   if (typeof value === 'string') {
+    // eslint-disable-next-line no-control-regex -- deliberate C0 control-character sanitizer
     return value.replace(/\u0000/g, '').replace(/[\u0001-\u0008\u000B\u000C\u000E-\u001F]/g, '')
   }
   if (typeof value === 'number' || typeof value === 'boolean') return value
@@ -143,6 +144,7 @@ function sanitizeJsonForPg(value, depth = 0) {
   if (typeof value === 'object') {
     const out = {}
     for (const [k, v] of Object.entries(value)) {
+      // eslint-disable-next-line no-control-regex -- deliberate C0 control-character sanitizer
       const key = String(k).replace(/\u0000/g, '').replace(/[\r\n]+/g, ' ').trim()
       if (!key) continue
       out[key] = sanitizeJsonForPg(v, depth + 1)

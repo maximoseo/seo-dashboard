@@ -31,13 +31,43 @@ describe('project summary builders', () => {
     expect(getProjectByDomain(projects, 'missing.co.il')).toBeNull()
   })
 
-  it('does not invent alert/task counters for durable supabase portfolio missing overlays', () => {
+  it('never synthesizes health/counters/live for a durable supabase roster project without a measured spine', () => {
     const projects = buildProjectSummaries([
       { id: 'uuid-1', clientId: 'c1', clientName: 'NYG', name: 'NYG', domain: 'nyg.co.il', market: 'Israel', status: 'active', priority: 'high' },
     ], 'supabase')
 
-    expect(projects[0].alertCount).toBe(0)
-    expect(projects[0].taskCount).toBe(0)
-    expect(projects[0].dataState).toBe('live')
+    const p = projects[0]
+    // P0 truth: no invented score, no live label, no fabricated counters.
+    expect(p.healthScore).toBeNull()
+    expect(typeof p.healthScore).not.toBe('number')
+    expect(p.alertCount).toBe(0)
+    expect(p.taskCount).toBe(0)
+    expect(p.lastFetchedAt).toBeNull()
+    expect(p.dataState).toBe('unavailable')
+    // Modules must not claim live/cached without evidence; scaffolds stay planned.
+    expect(p.modules.find(m => m.slug === 'overview')?.state).toBe('unavailable')
+    expect(p.modules.find(m => m.slug === 'keywords')?.state).toBe('unavailable')
+    expect(p.modules.find(m => m.slug === 'alerts')?.state).toBe('unavailable')
+    expect(p.modules.find(m => m.slug === 'local-seo')?.state).toBe('planned')
+    expect(p.modules.find(m => m.slug === 'geo-ai')?.state).toBe('planned')
+  })
+
+  it('marks a supabase project live only when a measured snapshot overlay is present', () => {
+    const overlays = {
+      'uuid-1': { healthScore: 71, alertCount: 2, taskCount: 3, lastFetchedAt: '2026-07-22T00:00:00.000Z', connectedSources: ['SEMrush', 'DataForSEO'] },
+    }
+    const projects = buildProjectSummaries([
+      { id: 'uuid-1', clientId: 'c1', clientName: 'NYG', name: 'NYG', domain: 'nyg.co.il', market: 'Israel', status: 'active', priority: 'high' },
+    ], 'supabase', overlays)
+
+    const p = projects[0]
+    expect(p.healthScore).toBe(71)
+    expect(p.alertCount).toBe(2)
+    expect(p.taskCount).toBe(3)
+    expect(p.dataState).toBe('live')
+    expect(p.lastFetchedAt).toBe('2026-07-22T00:00:00.000Z')
+    expect(p.modules.find(m => m.slug === 'overview')?.state).toBe('live')
+    expect(p.modules.find(m => m.slug === 'keywords')?.state).toBe('cached')
+    expect(p.modules.find(m => m.slug === 'local-seo')?.state).toBe('planned')
   })
 })
