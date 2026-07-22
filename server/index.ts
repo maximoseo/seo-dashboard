@@ -244,6 +244,7 @@ function clearSessionCookie(req: express.Request): string {
 app.use('/api', async (req, res, next) => {
   if (
     req.path === '/health' ||
+    req.path === '/version' ||
     req.path === '/auth/login' ||
     (req.method === 'GET' && (req.path === '/reports/share' || /^\/reports\/share\/[^/]+$/.test(req.path)))
   ) {
@@ -5151,6 +5152,17 @@ function providerStatus() {
 
 app.get('/api/health', async (_req, res) => {
   res.json({ ok: true, service: 'seo-dashboard-api', timestamp: new Date().toISOString() })
+})
+
+// Public deployed-version probe so releases can verify the promoted Git SHA in production.
+app.get('/api/version', (_req, res) => {
+  res.json({
+    ok: true,
+    sha: process.env.VERCEL_GIT_COMMIT_SHA || process.env.COMMIT_SHA || process.env.GIT_COMMIT_SHA || 'unknown',
+    ref: process.env.VERCEL_GIT_COMMIT_REF || process.env.GIT_BRANCH || null,
+    env: process.env.VERCEL_ENV || process.env.NODE_ENV || 'unknown',
+    timestamp: new Date().toISOString(),
+  })
 })
 
 app.get('/api/status', async (_req, res) => {
