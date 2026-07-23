@@ -38,4 +38,14 @@ export default tseslint.config(
       },
     },
   },
+  {
+    files: ['public/**/*.js'],
+    languageOptions: {
+      ecmaVersion: 'latest',
+      sourceType: 'script',
+      globals: {
+        ...globals.serviceworker,
+      },
+    },
+  },
 )

@@ -1015,6 +1015,7 @@ function sanitizeJsonForPg(value: unknown, depth = 0): unknown {
   if (value == null) return value
   if (typeof value === 'string') {
     // drop U+0000 and other non-printable C0 controls except tab/newline
+    // eslint-disable-next-line no-control-regex -- strips C0 controls for Postgres
     return value.replace(/\u0000/g, '').replace(/[\u0001-\u0008\u000B\u000C\u000E-\u001F]/g, '')
   }
   if (typeof value === 'number' || typeof value === 'boolean') return value
@@ -1022,6 +1023,7 @@ function sanitizeJsonForPg(value: unknown, depth = 0): unknown {
   if (typeof value === 'object') {
     const out: Record<string, unknown> = {}
     for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+      // eslint-disable-next-line no-control-regex -- strips C0 controls for Postgres
       const key = String(k).replace(/\u0000/g, '').replace(/[\r\n]+/g, ' ').trim()
       if (!key) continue
       out[key] = sanitizeJsonForPg(v, depth + 1)
@@ -3238,7 +3240,7 @@ app.post('/api/site-audit/recheck-url', expensiveLimiter, async (req, res) => {
 app.post('/api/vitals/aggregated', expensiveLimiter, async (req, res) => {
   const { url } = req.body || {}
   if (!url || !String(url).trim()) return res.status(400).json({ error: 'url required' })
-  let domainFromUrl = ''
+  let domainFromUrl: string
   try { domainFromUrl = canonicalizeDomain(new URL(String(url)).hostname) } catch { domainFromUrl = canonicalizeDomain(String(url)) }
   const result: Record<string, any> = { url, domain: domainFromUrl, sources: {}, activeSources: [] as string[] }
 
