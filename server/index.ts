@@ -37,6 +37,7 @@ import {
 import { alertsFromSnapshotRows, buildSnapshotOverlayMap, extractProviderMetrics } from './data/snapshotSpine.js'
 import { reserveProviderBudget } from './providers/budgetLedger.js'
 import { requestId, securityHeaders, csrfGuard, assertPublicHttpUrl } from './security.js'
+import { requestLogger } from './logger.js'
 import { loadLatestSnapshots, loadOpenCounts, persistAlertsAndTasks } from './data/persistOps.js'
 import { loadAgenticOsBridge, pushCriticalAlertToAsana, pushCriticalAlertToTodo } from './integrations/bridges.js'
 import { resolveMarket, serankingResearchUrl } from './markets/resolveMarket.js'
@@ -108,6 +109,7 @@ const expensiveLimiter = rateLimit({
 })
 
 app.use('/api', generalLimiter)
+app.use('/api', requestLogger())
 
 
 
