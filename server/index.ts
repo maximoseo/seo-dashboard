@@ -379,6 +379,11 @@ function validateBody(schema: z.ZodSchema) {
 const loginLimiter = rateLimit({
   windowMs: 60_000,
   max: 8,
+  standardHeaders: true,
+  legacyHeaders: false,
+  // Key by normalized account + IP: throttles brute force per account without letting one shared
+  // (NAT) IP lock out every user, and without letting an attacker rotate usernames for free.
+  keyGenerator: (req) => `${String((req.body as { username?: string })?.username ?? '').trim().toLowerCase()}|${req.ip}`,
   message: { error: 'Too many login attempts. Please wait and try again.' },
 })
 
