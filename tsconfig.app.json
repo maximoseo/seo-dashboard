@@ -21,5 +21,6 @@
     },
     "ignoreDeprecations": "6.0"
   },
-  "include": ["src"]
+  "include": ["src"],
+  "exclude": ["src/pages/api", "src/lib/telegram-alert.ts"]
 }
