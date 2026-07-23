@@ -36,6 +36,7 @@ import {
 } from './projects/projectSummary.js'
 import { alertsFromSnapshotRows, buildSnapshotOverlayMap, extractProviderMetrics } from './data/snapshotSpine.js'
 import { reserveProviderBudget } from './providers/budgetLedger.js'
+import { requestId, securityHeaders, csrfGuard } from './security.js'
 import { loadLatestSnapshots, loadOpenCounts, persistAlertsAndTasks } from './data/persistOps.js'
 import { loadAgenticOsBridge, pushCriticalAlertToAsana, pushCriticalAlertToTodo } from './integrations/bridges.js'
 import { resolveMarket, serankingResearchUrl } from './markets/resolveMarket.js'
@@ -68,6 +69,9 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
 const app = express()
 app.set('trust proxy', 1)
+// Correlation id + security headers on every response (observability + CSP).
+app.use(requestId())
+app.use(securityHeaders())
 const PORT = process.env.PORT || 3001
 
 // Caches: 5min for realtime, 24h for historical
@@ -239,6 +243,9 @@ function sessionCookie(req: express.Request, token: string, maxAgeSeconds: numbe
 function clearSessionCookie(req: express.Request): string {
   return sessionCookie(req, '', 0)
 }
+
+// CSRF: block cross-origin state-changing requests that ride the session cookie (bearer/cron exempt).
+app.use('/api', csrfGuard(ALLOWED_ORIGINS, DASHBOARD_SESSION_COOKIE))
 
 // Auth middleware — /api/health and /api/auth/login are intentionally public.
 // Public share links are read-only HTML/MD (no mutating data) — /reports/share?id=xxx (single-segment routing).
