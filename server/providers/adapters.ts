@@ -557,7 +557,7 @@ export function buildKeywordGapMatrix(
       const cpc = ck.cpc ?? ours?.cpc ?? null
       const theirTraffic = ck.traffic ?? null
 
-      let kind: KeywordGapRow['kind'] = 'missing'
+      let kind: KeywordGapRow['kind']
       if (ourPos == null) {
         kind = 'missing'
         missing += 1
